@@ -1,0 +1,8 @@
+six
+decorator
+numpy>=1.7
+emlib
+bpf4
+sndtrck
+appdirs
+pyyaml

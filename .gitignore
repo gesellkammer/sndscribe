@@ -1,0 +1,5 @@
+dist
+build
+*egg*
+.idea
+__pycache__
