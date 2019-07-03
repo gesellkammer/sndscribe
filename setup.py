@@ -104,11 +104,8 @@ clean_previous_install()
 
 setup(
     name='sndscribe',
-    version='0.2.1',
-    description='Translate the spectrum of an audio file into musical notation',
-    long_description=readme,
-    author='Eduardo Moguillansky',
-    author_email='eduardo.moguillansky@gmail.com',
+    python_requires=">=3.6",
+    version='0.2.2',
     packages=[
         'sndscribe',
     ],
@@ -117,7 +114,6 @@ setup(
         'appdirs'
     ],
     install_requires=[
-        "six",
         "decorator",
         "numpy>=1.7",
         "emlib",
@@ -129,5 +125,11 @@ setup(
     zip_safe=False,
     classifiers=[
         'Programming Language :: Python :: 3.6',
+        'Programming Language :: Python :: 3.7',
     ],
+    author='Eduardo Moguillansky',
+    author_email='eduardo.moguillansky@gmail.com',
+    description='Translate the spectrum of an audio file into musical notation',
+    long_description=readme,
+                
 )

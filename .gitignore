@@ -3,3 +3,7 @@ build
 *egg*
 .idea
 __pycache__
+README.rst
+*.pyc
+*.so
+.mypy*
