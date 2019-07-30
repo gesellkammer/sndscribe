@@ -1,12 +1,14 @@
-from __future__ import absolute_import
+from emlib import lib
+
 from .definitions import (DEFAULT_POSSIBLE_DIVISIONS, MUSICXML_DIVISIONS,
                           REGULAR_NOTETYPES)
-from .scorefuncs import infer_clef, get_notated_duration
+from .scorefuncs import infer_clef, notated_duration
 from .voice import Voice
 from .tools import R, timesig2pulsedur, previous_power_of_two
 from .conversions import (dyn2fontsize, dur2xml, pitch2xml,
                           micro_to_xmlaccidental, bw_to_xmlnotehead)
 from .config import RenderConfig
+from .note import Note, Rest
 from .typehints import Number, Opt
 
 
@@ -22,7 +24,8 @@ class Staff(object):
         assert any(not note.isrest() for note in notes), "only rests in this Staff!"
         clef = clef or infer_clef(notes)
         assert clef in ('F', 'F8', 'G', 'G8')
-        assert isinstance(timesig, tuple) and len(timesig) == 2 and all(isinstance(x, int) for x in timesig)
+        assert isinstance(timesig, tuple) and len(timesig) == 2 and all(isinstance(x, int) for x in timesig), \
+            f"Timesig should be a tuple(num, den), got {timesig} (type: {type(timesig)})"
         assert isinstance(size, int) and size > 0
         self.voices = voices
         self.measures = []
@@ -80,15 +83,18 @@ class Staff(object):
                     lines.append('\t    Offset: %.3f  Div: %d' %
                                  (pulse.offset, pulse.subdivision))
                     for note in pulse.notes:
-                        dyn = "" if note.isrest() else dyncurve.amp2dyn(note.amp)
-                        lines.append("\t      {note:<40} {dyn}".format(
-                            note=note, dyn=dyn))
+                        if isinstance(note, Note):
+                            dyn = note.dynamic
+                        else:
+                            dyn = ""
+                        # dyn = "" if note.isrest() else dyncurve.amp2dyn(note.amp)
+                        lines.append(f"\t      {lib.ljust(note, 50)} {dyn}")
         return "\n".join(lines)
         
     def toxml(self, parser):
         include_dynamics = self.renderconfig['show_dynamics']
         include_sizes = self.renderconfig['notesize_follows_dynamic']
-        use_css_sizes = self.renderconfig['use_css_sizes']
+        use_css_sizes = False
         """genera XML code para el propio staff"""
         dyncurve = self.renderconfig.dyncurve
         num_measures = len(self.voices[0].measures)
@@ -97,6 +103,13 @@ class Staff(object):
         close_tie = [False for _ in range(len(self.voices))]
         clef_dict = {'G':'2', 'F':'4', 'C':'3'}
         _, T, T1 = parser, parser.tag, parser.tag1
+
+        for voice in self.voices:
+            for measure in voice:
+                for pulse in measure:
+                    pulse.join_tied_notes()
+            voice.check_ties()
+
         for imeasure in range(num_measures):
             # encabezado del cada measure
             with T('measure', number=imeasure+1):
@@ -129,15 +142,16 @@ class Staff(object):
                 for voice_number, voice in enumerate(self.voices):
                     measure = voice.measures[imeasure]
                     for pulse in measure.pulses:
-                        pulse.join_tied_notes()
+                        # the number of notes in the pulse (p) -- p:q
                         actual_notes = pulse.subdivision
+                        # the normal notes in the pulse (q) -- p:q
                         normal_notes = previous_power_of_two(pulse.subdivision)
                         normal_type = REGULAR_NOTETYPES[self.timesig[1]*normal_notes]
                         current_numbeams = 0
                         pulse.verify()
                         for note_number, note in enumerate(pulse.notes):
                             duration = dur2xml(note.dur)
-                            durtype, numbeams, numdots = get_notated_duration(
+                            durtype, numbeams, numdots = notated_duration(
                                 note.dur, pulse.subdivision, pulse_dur, self.timesig)
                             is_lastnote = note_number == len(pulse.notes)-1
                             noteattrs = {}
@@ -155,12 +169,14 @@ class Staff(object):
                                         T1('step', step)
                                         T1('alter', alter)
                                         T1('octave', octave)
+                                    if alter != 0:
+                                        T1('accidental', micro_to_xmlaccidental(alter))
                                 T1('duration', duration)
                                 # se fija si hay que agregar ligaduras
                                 if close_tie[voice_number]:
                                     _.empty('tie', type='stop')
-                                if note.tied:
-                                    _.empty('tie', type='stop')
+                                elif note.tied:
+                                    _.empty('tie', type='start')
                                 with T('voice'):
                                     _(voice_number+1)
                                 typeattrs = {}
@@ -171,9 +187,9 @@ class Staff(object):
                                 if numdots > 0:
                                     for dot in range(numdots):
                                         _.empty('dot')
-                                if not note.isrest() and alter != 0:
-                                    T1('accidental', micro_to_xmlaccidental(alter))
-                                do_tuplet = pulse.subdivision in (1, 2, 4, 8, 16, 32, 64)
+
+                                # do_tuplet = pulse.subdivision not in (1, 2, 4, 8, 16, 32, 64)
+                                do_tuplet = actual_notes != normal_notes
                                 if do_tuplet:
                                     with T('time-modification'):
                                         T1('actual-notes', actual_notes)
@@ -222,8 +238,7 @@ class Staff(object):
                                         _.empty('tied', type='start')
                                     if do_tuplet:
                                         if note_number == 0:
-                                            _.empty('tuplet', bracket='yes', number=1,
-                                                    type='start')
+                                            _.empty('tuplet', bracket='yes', number=1, type='start')
                                         if is_lastnote:
                                             _.empty('tuplet', number=1, type='stop')
                                     if include_dynamics and do_dynamics:

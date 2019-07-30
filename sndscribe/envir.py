@@ -142,6 +142,13 @@ def get_scriptsdir():
     return scriptsdir
 
 
+def get_datafile(filename):
+    datadir = pkg.resource_filename(pkg.Requirement.parse("sndscribe"), "sndscribe/data")
+    target = os.path.join(datadir, filename)
+    if not os.path.exists(target):
+        return None
+    return target
+
 def xml2ly_init():
     global _scripts_initialized
     if _scripts_initialized:
@@ -162,5 +169,4 @@ def xml2ly_init():
         for f in hackedfiles:
             basename = os.path.split(f)[1]
             f2 = os.path.join(scriptsdir, os.path.splitext(basename)[0] + ".py")
-            logger.debug(f"copying {f} to {f2}")
             shutil.copy(f, f2)

@@ -51,7 +51,9 @@ class Measure:
                     dyn = dyncurve.amp2dyn(note.amp) if not note.isrest() else "-"
                     logger.debug(f"note: {note}   dyn: {dyn}")
                 logger.error("too many notes")
-            logger.debug(f"creating Pulse: {pulsenum} with {len(notes_in_pulse)} notes")
+            #logger.debug(f"create_pulse: Pulse #{pulsenum} with {len(notes_in_pulse)} notes / {t0}s - {t1}s")
+            #for i, n in enumerate(notes_in_pulse):
+            #    logger.debug(f"    note #{i}: {n}")
             pulse = Pulse(notes_in_pulse, t0, self.renderconfig)
             pulses.append(notes_in_pulse)
             self.pulses.append(pulse)

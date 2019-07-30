@@ -109,7 +109,7 @@ setup(
     packages=[
         'sndscribe',
     ],
-    package_data={'sndscribe':['xml2ly/*.py_']},
+    package_data={'sndscribe':['xml2ly/*.py_', 'data/*']},
     setup_requires=[
         'appdirs'
     ],
@@ -120,7 +120,8 @@ setup(
         "bpf4",
         "sndtrck",
         "appdirs",
-        "pyyaml"],
+        "ruamel.yaml"
+    ],
     license="GPL",
     zip_safe=False,
     classifiers=[

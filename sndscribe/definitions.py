@@ -1,5 +1,6 @@
 from __future__ import absolute_import
 import bpf4 as bpf
+from typing import NamedTuple
 import os
 from .typehints import *
 
@@ -9,18 +10,20 @@ platform_name = os.uname()[0]
 
 STR2CLASS = {'C': 0, 'D': 2, 'E': 4, 'F': 5, 'G': 7, 'A': 8, 'B': 10}
 
+POSSIBLE_DYNAMICS = {'pppp', 'ppp', 'pp', 'p', 'mp', 'mf', 'f', 'ff', 'fff', 'ffff'}
+
 # Noteheadsize as defined by lilypond
 DYNAMIC_TO_RELATIVESIZE = {
-    'pppp': -6,
-    'ppp' : -5,
+    'pppp': -5,
+    'ppp' : -4,
     'pp'  : -3,
     'p'   : -2,
     'mp'  : -1,
     'mf'  : 0,
-    'f'   : 2,
-    'ff'  : 3,
-    'fff' : 4,
-    'ffff': 6
+    'f'   : 1,
+    'ff'  : 2,
+    'fff' : 3,
+    'ffff': 4
 }
 
 # musicxml font-size attribute
@@ -62,6 +65,19 @@ REGULAR_NOTETYPES = {
 }
 
 
+NOTETYPE_TO_NUMERIC_DURATION = {
+    'whole': 1,
+    'half': 2,
+    'quarter': 4,
+    'eighth': 8,
+    '16th': 16,
+    '32nd': 32,
+    '64th': 64,
+    '128th': 128
+}
+
+
+
 IRREGULAR_NOTETYPES = {
     # note_type, dots
     (7,4): ('quarter', 2),
@@ -92,6 +108,9 @@ IRREGULAR_NOTETYPES = {
     (4,5):('quarter', 0),
 
     (1,6):('16th', 0),
+    (2,6):('eighth', 0),
+    (3,6):('eighth', 1),
+    (4,6):('quarter', 0),
     (5,6):('quarter', 0),   #
 
     (1,7):('16th', 0),
@@ -118,9 +137,9 @@ IRREGULAR_NOTETYPES = {
     (2,11):('16th', 0),
     (3,11):('16th', 1),
     (4,11):('eight', 0),
-    (5,11):('eigth', 0),
-    (6,11):('eigth', 1),
-    (7,11):('eigth', 2),
+    (5,11):('eighth', 0),
+    (6,11):('eighth', 1),
+    (7,11):('eighth', 2),
     (8,11):('quarter', 0),
     (9,11):('quarter', 0),
     (10,11):('quarter', 1),
@@ -159,35 +178,59 @@ IRREGULAR_NOTETYPES = {
     (4, 16):('16th', 0),
     (6, 16):('16th', 1),
     (7, 16):('16th', 2),
-    (8,16):('eigth', 0),
-    (11,16):('eigth', 0),
-    (12,16):('eigth', 1),
+    (8,16) :('eighth', 0),
+    (11,16):('eighth', 0),
+    (12,16):('eighth', 1),
     (15,16):('eighth', 3),
 
-    (1, 32):('128th', 0),
-    (2, 32):('64th', 0),
-    (3, 32):('64th', 1),
-    (7, 32):('32th', 2),
-    (11,32):('16th', 0),
+    (1, 32) :('128th', 0),
+    (2, 32) :('64th', 0),
+    (3, 32) :('64th', 1),
+    (7, 32) :('32th', 2),
+    (11,32) :('16th', 0),
     (15, 32):('16th', 3),
-    (31, 32):('eigth', 4),
+    (31, 32):('eighth', 4),
 }
 
 NOTETYPES = list(REGULAR_NOTETYPES.values())
 
 MUSICXML_ACCIDENTALS = {
+   -1.50: 'three-quarters-flat',
+   -1.25: 'flat-down',
    -1.00: 'flat',
-   -0.75: 'quarter-flat',
+   -0.75: 'flat-up',
    -0.50: 'quarter-flat',
-   -0.25: 'natural',
-   0.00: 'natural',
-   0.25: 'natural',
-   0.50: 'quarter-sharp',
-   0.75: 'quarter-sharp',
-   1.00: 'sharp',
-   1.25: 'sharp',
-   1.50: 'three-quarters-sharp',
-   1.75: 'three-quarters-sharp'}
+   -0.25: 'natural-down',
+    0.00: 'natural',
+    0.25: 'natural-up',
+    0.50: 'quarter-sharp',
+    0.75: 'sharp-down',
+    1.00: 'sharp',
+    1.25: 'sharp-up',
+    1.50: 'three-quarters-sharp',
+    1.75: 'three-quarters-sharp'
+}
+
+
+"""
+accidentals = {
+    # cents   name       pc mod
+        0:   'natural',
+        25:  'natural-up',
+        50:  'quarter-sharp',
+        75:  'sharp-down',
+        100: 'sharp',
+        125: 'sharp-up',
+        150: 'three-quarters-sharp',
+
+        -25: 'natural-down',
+        -50: 'quarter-flat',
+        -75: 'flat-up',
+        -100:'flat',
+        -125:'flat-down',
+        -150:'three-quarters-flat'
+    }
+"""
 
 
 class XmlNotehead(NamedTuple):
@@ -213,8 +256,10 @@ LILYPATH = {
     'Linux':'/usr/bin/lilypond'
 }[platform_name]
 
-
-MUSICXML_DIVISIONS = 55440    # exactitud de la grid en la traduccion a musicxml
+# exactitud de la grid en la traduccion a musicxml
+# lcm(3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 20, 32)
+# No puede representar exactamente tuples de 11, 13, 17
+MUSICXML_DIVISIONS = 10080
 MUSICXML_TENTHS = 40
 DEFAULT_POSSIBLE_DIVISIONS = (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12)
 
@@ -246,3 +291,30 @@ NOTE_DICT = dict(((0, 'C0'), (1, 'C1'), (2, 'D0'), (3, 'D1'), (4, 'E0'),
                   (5, 'F0'), (6, 'F1'), (7, 'G0'), (8, 'G1'), (9, 'A0'),
                   (10, 'A1'), (11, 'B0')))
 
+
+ALLOWED_DIVISIONS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 15, 16, 18, 20, 24, 30, 32}
+
+
+LILYPOND_ABSOLUTE_OCTAVE = {
+    -1:",,,,",
+    0:",,,",
+    1:",,",
+    2:",",
+    3:"",
+    4:"'",
+    5:"''",
+    6:"'''",
+    7:"''''",
+    8:"'''''"
+
+}
+
+
+class Region(NamedTuple):
+    t0: float
+    t1: float
+
+
+
+
+# Region = namedtuple("Region", "t0 t1")

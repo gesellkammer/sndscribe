@@ -4,11 +4,12 @@ from .note import *
 from .envir import logger
 from .dynamics import DynamicsCurve
 from .tools import Fraction, R, asR, isR
+from .conversions import typestr2numbeams
 from . import typehints as t
 
 
-def break_irregular_tuples(notes_in_pulse, div, pulsedur):
-    # type: (t.List[Event], int, Fraction) -> t.List[Event]
+def break_irregular_tuples(notes_in_pulse: t.List[Event], div: int, pulsedur: Fraction
+                           ) -> t.List[Event]:
     assert isinstance(div, int)
     assert 1 <= div < 32
     assert all(isinstance(note, Event) for note in notes_in_pulse)
@@ -30,8 +31,12 @@ def break_irregular_tuples(notes_in_pulse, div, pulsedur):
                 slots0, slots1 = numslots - 2, 2
             else:
                 raise ValueError("numslots should be one of 5, 9, 10, 11, 13, got {numslots}")
-            note0 = note.clone(dur=slotdur*slots0, tied=True)
-            note1 = note.clone(start=note0.end, dur=slotdur*slots1)
+            if isinstance(note, Note):
+                note0 = note.clone(dur=slotdur*slots0, tied=True)
+                note1 = note.clone(start=note0.end, dur=slotdur*slots1, tied=note0.tied)
+            else:
+                note0 = note.clone(dur=slotdur*slots0)
+                note1 = note.clone(start=note0.end, dur=slotdur*slots1)
             assert almosteq(note0.dur+note1.dur, note.dur)
             newnotes.append(note0)
             newnotes.append(note1)
@@ -41,21 +46,47 @@ def break_irregular_tuples(notes_in_pulse, div, pulsedur):
     assert newnotes[0].start == notes_in_pulse[0].start and newnotes[-1].end == notes_in_pulse[-1].end
     return newnotes
 
-
 @returns_tuple("typestr numbeams numdots")
-def get_notated_duration(dur, div, pulsedur, timesig):
-    # type: (Fraction, int, Fraction, t.Tup[int, int]) -> t.Tup[str, int, int]
+def _notated_duration(dur: Fraction, div: int, pulsedur: Fraction, timesig: t.Tup[int, int]
+                     ) -> t.Tup[str, int, int]:
     """
-    dur    : the duration of the note
-    div    : the division of the pulse
-    pulse  : the pulse duration
-    timesig: the time signature
+    This function is always called after break_irregular_tuples, so the passed dur should be
+    a regular duration, meaning that it is either an 8th, quarter, 16th note, etc (possibly
+    with a dot)
+
+    Args:
+        dur:
+        div:
+        pulsedur:
+        timesig:
 
     Returns:
-        notetype, numbeams, numdots
 
-    notetype: a string representing the notated duration
-              ("quarter", "eighth", etc)
+    """
+    assert isinstance(dur, Fraction)
+    assert isinstance(div, int)
+    assert isinstance(pulsedur, Fraction)
+    assert isinstance(timesig, tuple) and len(timesig) == 2 and isinstance(timesig[0], int) and isinstance(timesig[1], int)
+    denominator = R(timesig[1])
+
+
+@returns_tuple("typestr numbeams numdots")
+def notated_duration(dur: Fraction, div: int, pulsedur: Fraction, timesig: t.Tup[int, int]
+                     ) -> t.Tup[str, int, int]:
+    """
+    Given a duration within its context (division of the pulse, duration of the pulse, time
+    signature, returns elements needed to notate the duration: the duration type ("eigth", "quarter", etc),
+    the corresponding number of beams (1 for 8th note, 2 for 16th note, etc) and the corresponding
+    number of dots
+
+    Args:
+        dur: the duration of the note
+        div: the division of the pulse
+        pulsedur: the duration of the pulse
+        timesig: the time signature
+
+    Returns:
+        A tuple (typestr, numbeams, numdots)
 
     NB: Raises ValueError if it cannot determine a duration
     """
@@ -68,7 +99,6 @@ def get_notated_duration(dur, div, pulsedur, timesig):
     coef = R(1) if den == div else R(div)/R(den)
     den = int(den * coef)
     num = int(num * coef)
-    numbeams = int(math.log(den, 2))
     # Is it an irregular notetype?
     typestr, numdots = IRREGULAR_NOTETYPES.get((num, den), (None, None))
     if not typestr:
@@ -78,14 +108,14 @@ def get_notated_duration(dur, div, pulsedur, timesig):
             typestr, numdots = IRREGULAR_NOTETYPES[(num, den)]
         else:
             raise ValueError("Can't find notation for duration: " + str((num, den)))
-    assert isinstance(typestr, str) and typestr in NOTETYPES
-    assert isinstance(numbeams, int) and 0 <= numbeams <= 6, "numbeams: %d" % numbeams
-    assert isinstance(numdots, int) and 0 <= numdots <= 2
+    numbeams = typestr2numbeams(typestr)
+    assert isinstance(typestr, str) and typestr in NOTETYPES, f"typestr: {typestr} ({type(typestr)})"
+    assert isinstance(numbeams, int) and 0 <= numbeams <= 6, f"numbeams: {numbeams}"
+    assert isinstance(numdots, int) and 0 <= numdots <= 2, f"numdots: {numdots}"
     return typestr, numbeams, numdots
 
 
-def infer_clef(notes):
-    # type: (t.List[Event]) -> str
+def infer_clef(notes: t.List[Event]) -> str:
     """
     Infer a clef from the pitch of the notes
 
@@ -96,11 +126,11 @@ def infer_clef(notes):
     assert all(isinstance(n, Event) for n in notes)
     assert len(notes) > 0
     pitch = meanpitch(notes)
-    if pitch <= 36:
+    if pitch < 36:
         clef = 'F8'
-    elif 36 < pitch < 60:
+    elif 36 <= pitch < 60:
         clef = 'F'
-    elif 60 < pitch < 87:
+    elif 60 <= pitch < 87:
         clef = 'G'
     else:
         clef = 'G8'
@@ -108,8 +138,7 @@ def infer_clef(notes):
     return clef
 
 
-def snapnote(note, pitch_resolution, dyncurve):
-    # type: (Event, float, DynamicsCurve) -> Event
+def snapnote(note: Event, pitch_resolution: float, dyncurve: DynamicsCurve) -> Event:
     """
     Snaps the values of this Note (pitch, amplitude) to the grids given
 
@@ -182,7 +211,8 @@ def notes_join_tied(notes):
     return outnotes
 
 
-def divide_long_notes(notes, pulsedur, mindur=1e-8):
+def divide_long_notes(notes: t.List[Event], pulsedur: Fraction, mindur=1e-8
+                      ) -> t.List[Event]:
     """
     Divide las notas en fracciones no mayores que un pulso, uniendo
     las notas largas con ligaduras
@@ -199,47 +229,51 @@ def divide_long_notes(notes, pulsedur, mindur=1e-8):
     return newnotes
 
 
-def has_short_notes(notes, mindur=R(1, 64)) -> bool:
+def has_short_notes(notes: t.List[Event], mindur=R(1, 64)) -> bool:
     maxnotes = 5
     shortnotes = 0
     for n in notes:
         if n.dur < mindur:
-            logger.debug("small duration: {note}".format(note=n))
+            logger.debug(f"has_short_notes: small duration: {n}")
             shortnotes += 1
             if shortnotes >= maxnotes:
                 break
     return shortnotes > 0
 
 
-def cut_overlap(notes):
+def cut_overlap(notes: t.List[Event]) -> t.List[Event]:
     """
     New notes cut previous ones.
-
-    :type notes: list[Event]
-    :rtype : list[Event]
 
     Returns: the new notes
     """
     assert all(isinstance(n, Event) for n in notes)
+    for n0, n1 in pairwise(notes):
+        if n0.start >= n1.start:
+            raise AssertionError(f"Notes not sorted: {n0}, {n1}")
     if not hasoverlap(notes):
         return notes
     newnotes = []
     for note0, note1 in pairwise(notes):
-        if note0.end <= note1.start:
+        if note0.end<=note1.start:
             newnotes.append(note0)
         else:
-            overlap = note0.end - note1.start
-            if overlap > 1e-12:
+            overlap = note0.end-note1.start
+            if overlap>1e-12:
                 logger.debug("cutting overlap of: {0:f}".format(float(overlap)))
-            newnotes.append(note0.clone(dur=note0.dur - overlap))
+            newdur = note1.start-note0.end
+            if newdur<=0:
+                raise ValueError(f"negative overlap: {note0} {note1}")
+            newnotes.append(note0.clone(dur=newdur))
     newnotes.append(notes[-1])
     durnotes = sum(n.dur for n in notes)
     durnewnotes = sum(n.dur for n in newnotes)
-    assert almosteq(durnotes, durnewnotes, 1e-8), (float(durnotes), float(durnewnotes))
+    assert almosteq(durnotes, durnewnotes, 1e-8), \
+        f"original notes dur: {float(durnotes)}, new notes: {float(durnewnotes)}"
     assert not hasoverlap(newnotes)
     return newnotes
 
-    
+
 def hasoverlap(notes):
     """
     :type notes: list[Event]

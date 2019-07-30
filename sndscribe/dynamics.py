@@ -1,13 +1,10 @@
-# ----------------------------------------------------------------------------
-#
-#   functions to convert between dB and musical dynamics
-#   also makes a representation of the amplitude in terms of musical dynamics
+#  Functions to convert between dB and musical dynamics
+#  also makes a representation of the amplitude in terms of musical dynamics
 
 from bisect import bisect as _bisect
 import bpf4 as _bpf
 from bpf4 import BpfInterface
-from emlib.pitch import db2amp, amp2db
-# from typing import Optional as Opt, Sequence as Seq, Tuple as Tup, Union as U, List, Dict
+from emlib.pitchtools import db2amp, amp2db
 from . import typehints as t
 
 _DYNAMICS = ['pppp', 'ppp', 'pp', 'p', 'mp', 'mf', 'f', 'ff', 'fff', 'ffff']
@@ -24,6 +21,7 @@ def _aslist(obj) -> t.List:
     if isinstance(obj, list):
         return obj
     return list(obj)
+
 
 class DynamicsCurve(object):
     def __init__(self, bpf:BpfInterface, dynamics:t.List[str]=None) -> None:
@@ -43,6 +41,7 @@ class DynamicsCurve(object):
         amps2dyns, dyns2amps = _create_dynamics_mapping(fitbpf, dynamics=self.dynamics)
         self._amps2dyns:t.List[t.Tup[float, str]] = amps2dyns
         self._dyns2amps:t.Dict[str, float]        = dyns2amps
+        self._amps = [amp for amp, dyn in amps2dyns]
         assert len(self._amps2dyns) == len(self.dynamics)
 
     @classmethod
@@ -66,27 +65,34 @@ class DynamicsCurve(object):
 
     def amp2dyn(self, amp:float, nearest=True) -> str:
         """
-        amp: an amplitude 0-1
-        nearest: if True, find the nearest dynamic (can round up), otherwise, the next lower dynamic
-        
         Convert amplitude to a string representation of its corresponding
         musical dynamic as defined in DYNAMIC_TABLE
+        
+        amp: an amplitude 0-1
+        nearest: if True, find the nearest dynamic (can round up), 
+            otherwise, the next lower dynamic
         """
-        curve = self._amps2dyns
-        if amp < curve[0][0]:
-            return curve[0][1]
-        if amp > curve[-1][0]:
-            return curve[-1][1]
-        insert_point = _bisect(curve, (amp, None))
+        amps = self._amps
+        dyns = self.dynamics
+        if amp < amps[0]:
+            return dyns[0]
+        if amp > amps[-1]:
+            return dyns[-1]
+        insert_point = _bisect(amps, amp)
         if not nearest:
-            floor = max(0, curve[insert_point-1])
-            return curve[floor][1]
-        amp0, dyn0 = curve[insert_point - 1]
-        amp1, dyn1 = curve[insert_point]
+            floor = max(0, amps[insert_point - 1])
+            return dyns[floor]
+        if insert_point == 0:
+            return dyns[0]
+        if insert_point >= len(amps):
+            return dyns[-1]
+        assert 1 <= insert_point < len(amps)
+        amp0, dyn0 = amps[insert_point - 1], dyns[insert_point - 1]
+        amp1, dyn1 = amps[insert_point], dyns[insert_point]
         db = amp2db(amp)
-        out = dyn0 if abs(db-amp2db(amp0)) < abs(db-amp2db(amp1)) else dyn1
-        assert isinstance(out, str)
-        return out
+        dyn = dyn0 if abs(db-amp2db(amp0)) < abs(db-amp2db(amp1)) else dyn1
+        assert isinstance(dyn, str)
+        return dyn
 
     def dyn2amp(self, dyn:str) -> float:
         """

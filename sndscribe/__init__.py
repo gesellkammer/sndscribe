@@ -1,5 +1,5 @@
 from .api import *
-from .import envir
+from . import envir
 
-envir.xml2ly_init()
+# envir.xml2ly_init()
 

@@ -95,7 +95,7 @@ class Pulse(object):
         pulsedur = timesig2pulsedur(self.renderconfig.timesig, self.renderconfig.tempo)
         newnotes = break_irregular_tuples(joint_notes, self.subdivision, pulsedur)
 
-        def simplify(notes, pulsedur):
+        def simplify_pulse(notes, pulsedur):
             if len(notes) > 1 and all(note.isrest() for note in notes):
                 t0, t1 = notes[0].start, notes[-1].end
                 div, notes = 1, [Rest(t0, t1-t0)]
@@ -106,9 +106,9 @@ class Pulse(object):
                 div = None
             return div, notes
 
-        division, newnotes = simplify(newnotes, pulsedur)
+        division, newnotes = simplify_pulse(newnotes, pulsedur)
         if division is not None and self.subdivision != division:
-            logger.debug("changing div: %d --> %d" % (self.subdivision, division))
+            # logger.debug(f"join_tied_notes: changing div. from {self.subdivision} to {division}")
             self.subdivision = division
         assert all(isinstance(note, Event) for note in newnotes)
         assert newnotes[0].start == self.notes[0].start

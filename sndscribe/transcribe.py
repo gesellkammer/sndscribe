@@ -1,166 +1,203 @@
-from __future__ import division
-from __future__ import absolute_import
+from dataclasses import dataclass
+
 import sndtrck
 from emlib.numtheory import nextprime
-from emlib.lib import returns_tuple
-from . import score
-from . import pack 
-from .error import EmptySpectrum
-from .reduction import reduce_breakpoints
+from emlib.iterlib import pairwise
+from . import score as _score
+from . import voice as _voice
+from . import pack
+from . import error as _error
+from . import reduction
+from .track import Track, dump_tracks
+from .dynamics import  DynamicsCurve
 
-from .config import getdefaultconfig, RenderConfig
-from .dynamics import DynamicsCurve
+from .config import get_default_config, ConfigDict, RenderConfig
 from .envir import logger
 from . import typehints as t
 
 
-@returns_tuple("score spectrum tracks refectedpartials")
+@dataclass
+class ScoreResult:
+    score: _score.Score
+    spectrum: sndtrck.Spectrum
+    tracks: t.List[Track]
+    rejected: sndtrck.Spectrum
+
+    def __post_init__(self):
+        assert all(isinstance(track, Track) for track in self.tracks), \
+            [(track, type(track)) for track in self.tracks if not isinstance(track, Track)]
+
+    def dump_tracks(self):
+        return dump_tracks(self.tracks)
+
+
 def generate_score(spectrum:sndtrck.Spectrum,
-                   config:RenderConfig=None,
-                   timesig=(4, 4),
-                   tempo=60,
-                   dyncurve=None,
-                   midi=False,
-                   render=True
-                   ):
+                   config:ConfigDict=None,
+                   timesig=None,
+                   tempo=None,
+                   dyncurve: DynamicsCurve=None,
+                   ) -> ScoreResult:
     """
-    ++ First call config.makeconfig() to generate a config
-    
-    * spectrum: a sndtrck.Spectrum
-    * config: as returned by config.makeconfig
-    * dyncurve: as defined in dynamics.DynamicsCurve. It maps dynamics to amplitudes
-                If no dynamics curve is given, the config dict is queried for `dyncurvedescr`,
-                which is used if present. Otherwise, a default us used.
-                NB: use optimize.best_dyncurve to determine the best parameters
-    * midi: create a midi file for the resulting score (no microtones)
+    Generate a score from a spectrum
 
-    Returns: score, associated_spectrum, tracks
+    Args:
+        spectrum: a sndtrck.Spectrum.
+        config: a configuration as returned by make_config()
+        timesig: reserved for future use of a dynamic time signature.
+            Right now Use config['timesig'] to set the time signature
+        tempo: reserved for future implementation of varying tempo. Use config['tempo']
+        dyncurve: a dynamics.DynamicsCurve. Used if given, otherwise the configuration passed
+            is used to construct one.
 
-    * score: the rendered Score
-    * assigned_spectrum: the assigned Spectrum, before downsampling and quantization
-    * tracks: a track is a list of non-overlapping Partials which will be
-              rendered to a Staff, after downsampling and quantization
-    
-    The rendered Spectrum can be generated from the tracks:
+    Returns:
+        A ScoreResult(score, spectrum, tracks, rejected_spectrum)
 
-        rendered_spectrum = sndtrck.Spectrum(sum(tracks, []))
+    Example::
 
-    The Score can be rendered to PDF:
-    
-        out = generate_score(...)
-        out.score.toxml("myfile.xml")
-        pdffile = tools.musicxml2pdf("myfile.xml")   # --> myfile.pdf
+    spectrum = sndtrck.analyze("soundfile.wav", resolution=40)
+    cfg = make_config()
+    cfg['numvoices'] = 8
+    result = generate_score(spectrum, cfg)
+    result.score.writepdf("score.pdf")
     """
-    assert isinstance(timesig, tuple)
-    assert isinstance(tempo, (int, float))
 
-    assert config is None or isinstance(config, dict)
+    assert config is None or isinstance(config, ConfigDict)
+    assert tempo is None, "Setting tempo here is still not supported. Use config['tempo']"
+    assert timesig is None, "Setting timesig here is not supported yet. Use config['timesig']"
 
-    defaultconfig = getdefaultconfig()
-    config = config or getdefaultconfig()
+    config = config if config is not None else get_default_config()
+    render = True
 
-    def get(key:str):
-        v = config.get(key)
-        if v is not None:
-            v = defaultconfig.get(key)
-        return v
+    renderconfig = RenderConfig(config=config, tempo=tempo, timesig=timesig, dyncurve=dyncurve)
 
-    numvoices = get('numvoices')
-    assert isinstance(numvoices, int)
-
-    pagesize = get('pagesize')
-    assert isinstance(pagesize, str)
-
-    pagelayout = get('pagelayout')
-    assert isinstance(pagelayout, str)
-
-    staffsize = get('staffsize')
-    assert isinstance(staffsize, (int, float))
-
-    minfreq = get('minfreq')
-    assert minfreq is None or isinstance(minfreq, int)
-
-    pitchres = get('pitch_resolution')  # type: float
-    divisions = get('divisions')        # type: t.List[int]
-    partial_mindur = get('partial_mindur')
+    staffsize: int = renderconfig['staffsize']
+    pitchres: float = renderconfig['pitch_resolution']
+    divisions: t.List[int] = renderconfig['divisions']
+    interpartial_margin: float = renderconfig['pack_interpartial_margin']
+    partial_mindur: float = renderconfig['partial_mindur']
     assert partial_mindur is None or isinstance(partial_mindur, (int, float))
+
     if partial_mindur is None:
-        partial_mindur = 1.0/max(divisions) * 2
-    if dyncurve is not None:
-        dynamics_curve = dyncurve
-    else:
-        dyncurvedescr = get('dyncurvedescr')
-        if dyncurvedescr:
-            dynamics_curve = DynamicsCurve.fromdescr(**dyncurvedescr)
-        else:
-            dynamics_curve = score.get_default_dynamicscurve()
-    assert isinstance(dynamics_curve, DynamicsCurve)
-    downsample: bool = get('downsample_spectrum')
-    notesize_follows_dynamic: bool = get('notesize_follows_dynamic')
-    include_dynamics: bool = get('show_dynamics')
-    dbs = dynamics_curve.asdbs()
+        partial_mindur = 1.0/max(divisions)
+
+    if dyncurve:
+        renderconfig = renderconfig.clone(dyncurve=dyncurve)
+
+    downsample: bool = renderconfig['downsample_spectrum']
+    dbs = renderconfig.dyncurve.asdbs()
+
+    SEP = "~~~~~~~~~~~~~~~~~~~"
+    logger.info(f"Partial min. dur: {partial_mindur}")
+
     if partial_mindur > 0:
-        spectrum = sndtrck.Spectrum([p for p in spectrum if p.duration > partial_mindur])
+        spectrum2 = sndtrck.Spectrum([p for p in spectrum if p.duration > partial_mindur])
+        numfiltered = len(spectrum) - len(spectrum2)
+        logger.info(f"{SEP} filtered short partials (dur < {partial_mindur}: {numfiltered}")
+        spectrum = spectrum2
         if len(spectrum) == 0:
             logger.debug("Filtered short partials, but now there are no partials left...")
-            raise EmptySpectrum("Spectrum with 0 partials after eliminating short partials")
-    spectrum = spectrum.partials_between_freqs(0, 6000)
-    if minfreq is None:
-        minfreq = pack.estimate_minfreq(spectrum)
-    logger.info("Packing spectrum")
-    tracks, rejected = pack.packspectrum(spectrum,
-                                         numtracks=numvoices,
-                                         config=config,
-                                         maxrange=config['staffrange'], 
-                                         minfreq=minfreq)
+            raise _error.EmptySpectrum("Spectrum with 0 partials after eliminating short partials")
+    spectrum = spectrum.partials_between_freqs(0, renderconfig['maxfreq'])
+
+    logger.info(SEP + "Packing spectrum" + SEP)
+
+    tracks, rejected = pack.pack_spectrum(spectrum, config=renderconfig)
+
     if not tracks:
-        logger.debug("No voices were allocated for the partials")
-        return None
+        raise _error.ScoreGenerationError("No voices were allocated for the partials given")
+
+    for i, track in enumerate(tracks):
+        if track.has_overlap():
+            logger.error("Partials should not overlap!")
+            logger.error(f"Track #{i}")
+            for j, p in enumerate(track):
+                logger.error(f"    Partial #{j}: {p}")
+            raise _error.ScoreGenerationError("partials inside track overlap")
+
     if downsample:
-        logger.debug("Downsampling spectrum")
-        time_grid = 1/nextprime(max(divisions))
-        tracks = [reduce_breakpoints(track, pitch_grid=pitchres, db_grid=dbs, time_grid=time_grid)
-                  for track in tracks]
-    assigned_partials = sum(tracks, [])  # type: t.List[sndtrck.Partial]
-    s = score.Score(timesig=timesig, tempo=tempo, pitch_resolution=pitchres,
-                    include_dynamics=include_dynamics,
-                    notesize_follows_dynamic=notesize_follows_dynamic,
-                    pagesize=pagesize, pagelayout=pagelayout, staffsize=staffsize,
-                    possible_divs=divisions, midi_global_instrument=midi,
-                    dyncurve=dynamics_curve,
-                    # transient_mask=transient_mask,
-                    config=config)
+        logger.debug(f"Downsampling spectrum ({sum(len(t) for t in tracks)} partials in {len(tracks)} tracks")
+        dt = 1/(nextprime(max(divisions)) + 1)
+        newtracks = []
+        for track in tracks:
+            reduced_partials = reduction.reduce_breakpoints(track.partials, pitch_grid=pitchres, db_grid=dbs, time_grid=dt)
+            reduced_partials = reduction.fix_quantization_overlap(reduced_partials)
+            newtrack = Track(reduced_partials, mingap=interpartial_margin)
+            newtracks.append(newtrack)
+        logger.debug(f"generate_score: {sum(len(t) for t in newtracks)} partials in {len(newtrack)} tracks after downsampling")
+        tracks = newtracks
+
+    # assigned_partials = sum(tracks, [])  # type: t.List[sndtrck.Partial]
+    assigned_partials = sum((track.partials for track in tracks), [])
+    s = _score.Score(config=renderconfig)
+    logger.debug(SEP + "adding partials" + SEP)
+    logger.debug(f"Total number of partials: {sum(len(track) for track in tracks)} in {len(tracks)} tracks")
     voices = []
-    logger.debug("adding partials")
+
+    # check gaps between partials
     for track in tracks:
-        voice = score.Voice()
+        for p0, p1 in pairwise(track.partials):
+            if p1.t0 - p0.t1 < 0:
+                raise ValueError(f"the gap is too small: {p0} {p1}")
+
+    for track in tracks:
+        valid_partials = []
         for partial in track:
-            logger.debug("voice: %s  --- partial %s" % (voice, partial))
-            voice.addpartial(partial)
-        voices.append(voice)
+            if partial.duration < partial_mindur:
+                logger.warn(f"short partial found, skipping! {partial.duration} < {partial_mindur}")
+            else:
+                valid_partials.append(partial)
+        track.set_partials(valid_partials)
+
+
+    for i, track in enumerate(tracks):
+        voice = _voice.Voice(lastnote_duration=renderconfig['lastnote_duration'])
+        if track.has_overlap():
+            raise ValueError("Track has overlapping partials")
+        logger.debug(f"Processing Track / Voice # {i} ({len(track)} partials in Track)")
+        tooshort = track.remove_short_partials(partial_mindur)
+        if tooshort:
+            logger.debug(f"Removed short partials: {len(tooshort)}")
+        for partial in track:
+            if voice.isempty() or partial.t0 >= voice.end:
+                voice.addpartial(partial)
+            else:
+                raise ValueError(f"Partial does not fit in voice: partial.t0 {float(partial.t0):.3f} < voice.end {float(voice.end):.3f}")
+
+        if not voice.isempty():
+            voices.append(voice)
+        else:
+            logger.warn(f"Track #{i} empty")
+        assert voice.added_partials == len(track), f"Could not add all partials: partials={len(track)}, added={voice.added_partials}"
+
     voices.sort(key=lambda x: x.meanpitch(), reverse=True)
-    logger.info("~~~~~~~~~~~~~~ simplifying notes ~~~~~~~~~~~~~~~~~~~~~")
+    logger.info(SEP + "simplifying notes" + SEP)
     acceptedvoices = []
-    for voice in voices:
-        logger.debug("simplifying voices")
+
+    for i, voice in enumerate(voices):
+        logger.debug(f"simplifying voice #{i}")
         if len(voice.notes) == 0:
-            logger.debug("voice with 0 notes")
+            logger.debug(">>>> voice with 0 notes, skipping")
             continue
         if voice.meanpitch() <= 0:
-            logger.debug("voice is empty or has only rests")
+            logger.debug(">>>> voice is empty or has only rests, skipping")
             continue
-        simplified_notes = score.simplify_notes(voice.notes, pitchres, dynamics_curve)
+        simplified_notes = reduction.simplify_notes(voice.notes, pitchres, renderconfig.dyncurve)
         if len(simplified_notes) < len(voice.notes):
             logger.debug("simplified notes: %d --> %d" %
                          (len(voice.notes), len(simplified_notes)))
         voice.notes = simplified_notes
-        s.addstaff(score.Staff(voice, possible_divs=divisions, timesig=timesig, 
-                               tempo=tempo, size=staffsize))
+        s.addstaff(_score.Staff(voice, possible_divs=divisions, timesig=renderconfig.timesig,
+                               tempo=renderconfig.tempo, size=staffsize))
         acceptedvoices.append(voice)
+
+    logger.debug(f"Accepted voices: {len(acceptedvoices)}")
+
     if render:
         assert all(voice.meanpitch() > 0 for voice in acceptedvoices)
-        logger.info("rendering...")
+        logger.info(f"{SEP} rendering... {SEP}")
         s.render()
+
     assigned_spectrum = sndtrck.Spectrum(assigned_partials)
-    return s, assigned_spectrum, tracks, rejected
+    rejected_spectrum = sndtrck.Spectrum(rejected)
+    return ScoreResult(s, assigned_spectrum, tracks, rejected_spectrum)
 

@@ -1,12 +1,12 @@
-from __future__ import print_function
-from __future__ import absolute_import
 import math
 import collections
 import numpy
-from emlib.pitch import m2f, n2m, amp2db, db2amp
-from emlib.lib import checktype
+from emlib.pitchtools import m2f, n2m, amp2db, db2amp
+from emlib import lib
+from emlib.iterlib import pairwise
+
 from .definitions import *
-from . import lily
+from . import lilytools
 from .fraction import *
 from . import typehints as t
 
@@ -169,6 +169,7 @@ def istimesig(timesig:t.Tup[int, int]) -> bool:
     isa = isinstance
     return isa(timesig, tuple) and isa(timesig[0], int) and isa(timesig[1], int)
 
+
 def timesig2measuredur(timesig:t.Tup[int, int], tempo:t.U[int, Fraction]) -> Fraction:
     """
     
@@ -177,7 +178,7 @@ def timesig2measuredur(timesig:t.Tup[int, int], tempo:t.U[int, Fraction]) -> Fra
              as a reference, so if the timesig=(3, 8), the tempo refers to
              an 1/8 note
     """
-    assert checktype(timesig, (int, int))
+    assert lib.checktype(timesig, (int, int))
     assert isinstance(tempo, (int, Fraction))
     out = timesig2pulsedur(timesig, tempo) * timesig[0]
     assert isinstance(out, Fraction)
@@ -218,7 +219,7 @@ def break_dur_at_pulses(start:Fraction, dur:Fraction, pulsedur:Fraction) -> t.Li
     assert len(times) >= 1, "wtf!! start:{start}, dur:{dur}, pulse:{pulse}".format(
         start=float(start), dur=float(dur), pulse=pulsedur)
     assert almosteq(times[0][0], start) and almosteq(times[-1][1], start+dur)
-    assert checktype(times, [(Fraction, Fraction)])
+    assert lib.checktype(times, [(Fraction, Fraction)])
     return times
 
 
@@ -229,10 +230,6 @@ def next_pulse(time:t.Rat, pulsedur:Fraction) -> Fraction:
 def prev_pulse(time:t.Rat, pulsedur:Fraction) -> Fraction:
     time = asR(time)
     return time - (time % pulsedur)
-
-
-# def mod(x:T, y:T) -> T:
-#     return x % y
 
 
 def pulseceil(n:t.Number, pulsedur:Fraction) -> Fraction:
@@ -275,6 +272,7 @@ def weightedsum(*values:t.Tup[t.Number, t.Number]) -> float:
     weights = [w for v, w in values]
     return sum(v*w for v, w in values)/sum(weights)
 
+
 def iweightedsum(seq:t.Iter[t.Tup[t.Number, t.Number]]) -> float:
     """
     seq: an iterator of (value, weight)
@@ -287,21 +285,21 @@ def iweightedsum(seq:t.Iter[t.Tup[t.Number, t.Number]]) -> float:
     return totalvalue / totalweight
 
 
-def musicxml2pdf(xmlfile:str, outfile:t.Opt[str]=None, backend='lily') -> str:
+def musicxml2pdf(xmlfile:str, outfile:str=None, backend='lilypond') -> str:
     """
     Convert an xml file to pdf, return the path of the pdf file
     
     :param xmlfile: the path to the musicxml file 
     :param outfile: the path of the pdf file. If not given, the xmlfile with a pdf extension is used
-    :param backend: possible backends: lily, muse
+    :param backend: possible backends: lilypond, musescore
     :return: the path of the generated pdf file 
     """
     backend = backend.lower()
     if backend in ('lily', 'lilypond'):
-        lilyfile = lily.xml2lily(xmlfile)
+        lilyfile = lilytools.xml2lily(xmlfile)
         if not os.path.exists(lilyfile):
             raise RuntimeError("could not convert to lilypond (file does note exist: %s)" % lilyfile)
-        pdf = lily.lily2pdf(lilyfile, outfile)
+        pdf = lilytools.lily2pdf(lilyfile, outfile)
         if not pdf:
             raise RuntimeError("could not convert lilypond to pdf")
         return pdf
@@ -310,5 +308,46 @@ def musicxml2pdf(xmlfile:str, outfile:t.Opt[str]=None, backend='lily') -> str:
     else:
         raise NotImplementedError("Backend not supported")
 
+
 def xor(b1:bool, b2:bool) -> bool:
     return b1 != b2
+
+
+def check_sorted(objs, key=None):
+    if key is None:
+        key = lambda x:x
+    for x0, x1 in pairwise(objs):
+        if key(x0) >= key(x1):
+            raise ValueError(f"Not sorted: {x0} ({key(x0)} >= {x1} ({key(x1)})")
+
+
+def parse_timesig(timesig: str) -> Opt[Tup[int, int]]:
+    """
+    Convert a string timesignature of the form "5/8" in a tuple (5, 8).
+
+    Args:
+        timesig: a time signature as string, like "3/4"
+
+    Returns:
+        A tuple (num, den) representing the given timesignature, or
+        None if the time signature can't be parsed
+    """
+    try:
+        numstr, denstr = timesig.split("/")
+        return int(numstr), int(denstr)
+    except:
+        return None
+
+
+def as_timesig_tuple(timesig) -> Tup[int, int]:
+    if isinstance(timesig, tuple):
+        if len(timesig) == 2:
+            return timesig
+        raise ValueError(f"Expected a tuple(num, den) but got {timesig}")
+    elif isinstance(timesig, str):
+        timesigtup = parse_timesig(timesig)
+        if timesigtup is None:
+            raise ValueError(f"Can't convert string {timesig} to a time signature")
+        return timesigtup
+    else:
+        raise TypeError(f"timesig should be a tuple like (3, 4) or a string '3/4' but got {timesig}")

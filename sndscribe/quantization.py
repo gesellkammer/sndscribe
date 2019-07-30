@@ -1,8 +1,11 @@
 from __future__ import absolute_import
+from emlib.lib import checktype
+
 from emlib import lib
 import bisect
 from fractions import Fraction
 from math import sqrt
+
 
 from .config import RenderConfig
 from .note import *
@@ -21,16 +24,18 @@ class Result(NamedTuple):
     def __repr__(self):
         gridstr = " ".join("{x.numerator}/{x.denominator}".format(x=x) for x in self.grid)
         gridstr = "[%s]" % gridstr
-        L = ["  Total Penalty:Not %.1f" % self.penalty,
-             "  Notes: %s" % self.assigned_notes,
-             "  Grid : %s" % gridstr]
+        L = [f"\n Division: {self.division}",
+             f"   Total Penalty: {self.penalty:.1f}",
+             f"   Notes: {self.assigned_notes}",
+             f"   Grid : {gridstr}"
+        ]
         if self.info:
             info = " ".join(f"{key}={float(value):.1f}" for key, value in self.info.items())
             L.append("  Info: %s" % info)
         return "\n".join(L)
 
 
-def calculate_note_weight(note:Event, config:RenderConfig) -> float:
+def calculate_weight_note(note:Event, config:RenderConfig) -> float:
     if not isinstance(note, Note):
         amp = linearamp(db2amp(config['silence_db']))
         transient = 0.0
@@ -38,18 +43,18 @@ def calculate_note_weight(note:Event, config:RenderConfig) -> float:
         amp = linearamp(note.amp)
         transient = note.transient
     return weightedsum(
-        (amp*float(note.dur), config['amp_dur_weight']),
-        (transient,           config['transient_weight'])
+        (amp*float(note.dur), config['weight_ampdur']),
+        (transient,           config['weight_transient'])
     )
 
 
 def calculate_note_score(note:Event, time_shift:float, config:RenderConfig) -> float:
     if isinstance(note, Rest):
         return 0
-    noteweight, timingweight = config['note_weight'], config['time_accuracy_weight']
+    noteweight, timingweight = config['weight_note'], config['weight_time_accuracy']
     # TODO: check that time_shift is always 0..1 independent of pulse
     score = weightedsum(
-        (calculate_note_weight(note, config), noteweight),
+        (calculate_weight_note(note, config), noteweight),
         (1 - time_shift, timingweight)
     )
     return score
@@ -59,7 +64,7 @@ def calculate_average_note(notes:List[Note], config:RenderConfig) -> Note:
     """Average notes into one note, discarding silences"""
     notes = [n for n in notes if not n.isrest()]
     notes.sort(key=lambda n:n.start)
-    weights = [calculate_note_weight(n, config=config) for n in notes]
+    weights = [calculate_weight_note(n, config=config) for n in notes]
     pitches = [n.pitch for n in notes]
     amps = [n.amp for n in notes]
     pitch = iweightedsum(zip(pitches, weights))
@@ -117,7 +122,7 @@ def find_best_fit_for_slot(notes_in_slot:List[Event], slot_start:Fraction, confi
     return bestnote
 
 
-def calculate_timeshift_penalty(assigned_notes:Seq[Opt[Event]],
+def calculate_penalty_timeshift(assigned_notes:Seq[Opt[Event]],
                                 grid:List[Fraction],
                                 config:RenderConfig) -> float:
     """
@@ -176,9 +181,12 @@ class Division(NamedTuple):
     info: List[Result]
 
 
-def find_best_division(notes:List[Event], possible_divs:List[int], pulsestart:Fraction,
-                       pulsedur:Fraction, config:RenderConfig, dyncurve:DynamicsCurve) \
-                       -> Division:
+def find_best_division(notes: List[Event],
+                       possible_divs: List[int], 
+                       pulsestart: Fraction,
+                       pulsedur: Fraction, 
+                       config: RenderConfig, 
+                       dyncurve: DynamicsCurve) -> Division:
     """
     Return the division and the assigned notes
 
@@ -199,7 +207,8 @@ def find_best_division(notes:List[Event], possible_divs:List[int], pulsestart:Fr
         notes_in_slots = [[] for _ in range(division)]    # type: List[List[Event]]
         indexes_in_slots = [[] for _ in range(division)]  # type: List[List[int]]
         for inote, note in enumerate(notes):
-            slot = bisect.bisect(grid, note.start) - 1
+            # slot = bisect.bisect(grid, note.start) - 1
+            slot = min(lib.nearest_index(note.start, grid), len(grid)-1)
             notes_in_slots[slot].append(note)
             indexes_in_slots[slot].append(inote)
         # Assigned notes is a list of Events|None
@@ -222,9 +231,9 @@ def find_best_division(notes:List[Event], possible_divs:List[int], pulsestart:Fr
                     note = calculate_average_note(notes_in_slot, config)
                     assigned_notes[islot] = note
                     unassigned_notes[islot] = notes_in_slot
-        divcomplexity = config['divcomplexity'].get(division, 100)
+        divcomplexity = config['divcomplexity'].get(division, maxcomplexity * 2)
 
-        timeshift = calculate_timeshift_penalty(assigned_notes, grid, config)
+        timeshift = calculate_penalty_timeshift(assigned_notes, grid, config)
         predicted_durs = []  # type: List[Opt[Fraction]]
         for note in assigned_notes:
             if note is None:
@@ -235,33 +244,36 @@ def find_best_division(notes:List[Event], possible_divs:List[int], pulsestart:Fr
         predicted_incorrect_durs = []  # type: List[Fraction]
         for predicted_dur, note in zip(predicted_durs, assigned_notes):
             if predicted_durs is not None:
-                predicted_incorrect_durs.append(abs(predicted_dur - note.dur))
+                durdiff = abs(predicted_dur - note.dur) if note is not None else 0
+                predicted_incorrect_durs.append(durdiff)
         # unassigned_notes: similar to assigned_notes, but holds either None, or the
         # unassigned notes for each slot
         if join_small:
-            timeshift_weight = config['merged_notes_penalty']
+            timeshift_weight = config['penalty_merged_notes']
             # the thing to measure is how much information has been lost
             # by joining the notes in one slot into one note
             total_lost_info = 0.0
             for jointnote, original_notes in zip(assigned_notes, unassigned_notes):
                 if original_notes is not None:
                     total_lost_info += jointnote_lost_info(jointnote, original_notes, dyncurve)
-            leftout = total_lost_info * config['leftout_penalty']
+            leftout = total_lost_info * config['penalty_leftout']
         else:
-            timeshift_weight = config['timeshift_penalty']
+            timeshift_weight = config['penalty_timeshift']
             assert all(checktype(slot, [Event]) or slot is None for slot in unassigned_notes)
             unassigned_flat = sum((notes for notes in unassigned_notes if notes is not None), [])
-            leftout = sum(map(calculate_note_weight, unassigned_flat)) * config['leftout_penalty']
+            unassigned_notes_weights = [calculate_weight_note(n, config) for n in unassigned_flat]
+            leftout = sum(unassigned_notes_weights) * config['penalty_leftout']
+            # leftout = sum(map(calculate_weight_note, unassigned_flat)) * config['penalty_leftout']
 
         penalties = {
-            # 'leftout': sum(calculate_note_weight(note) for note in unassigned_notes) * quantization.leftout_penalty,
+            # 'leftout': sum(calculate_weight_note(note) for note in unassigned_notes) * quantization.penalty_leftout,
             'leftout': leftout,
-            'complexity': divcomplexity/maxcomplexity * config['complexity_penalty'],
-            'notelength': float(sum(predicted_incorrect_durs)) * config['incorrect_duration_penalty'],
+            'complexity': divcomplexity/maxcomplexity * config['penalty_complexity'],
+            'notelength': float(sum(predicted_incorrect_durs)) * config['penalty_incorrect_duration'],
             'timeshift': timeshift * timeshift_weight
         }
 
-        def calculate_penalty(penalties, method='euclidean'):
+        def calculate_penalty(penalties, method='euclidean') -> float:
             if method == 'euclidean':
                 values = list(penalties.values())
                 return sqrt(sum(value**2 for value in values))
@@ -306,17 +318,18 @@ def calculate_events_for_slots(assigned_notes: List[Opt[Event]],
     """
     Calculates the events that go in each slot
 
-    assigned_notes: a list of len=division, with one (Note | None) representing
-                    each slot. A None in a slot means that either it is empty (a Rest)
-                    or the previous note continues on this slot (depending on the duration)
-    grid: a list of len=division, with the time of each slot. grid[0] is the beginning of
-          the Pulse, grid[-1] + slotdur is the end of the pulse
-          (slotdur = grid[1] - grid[0], we assume that all slots are the same duration)
+    assigned_notes:
+        a list of len=division, with one (Note | None) representing
+        each slot. A None in a slot means that either it is empty (a Rest)
+        or the previous note continues on this slot (depending on the duration)
+    grid:
+        a list of len=division, with the time of each slot. grid[0] is the beginning of
+        ohe Pulse, grid[-1] + slotdur is the end of the pulse
+        (slotdur = grid[1] - grid[0], we assume that all slots are the same duration)
+    pulsedur:
+        the duration of this pulse
 
-    :type assigned_notes: list[Event|None]
-    :type grid: list[Fraction]
-    :type pulsedur: Fraction|int
-    :rtype : list[Event]
+
     """
     division: int = len(grid)
     slot_dur: Fraction = R(pulsedur, division)
@@ -324,7 +337,7 @@ def calculate_events_for_slots(assigned_notes: List[Opt[Event]],
     assert len(assigned_notes) == len(grid)
     assert all(isinstance(note, Event) or note is None for note in assigned_notes), assigned_notes
     assert all(isR(t) for t in grid)
-    assert all(t0 <= n.start < t0+slot_dur for n, t0 in zip(assigned_notes, grid) if n is not None)
+    # assert all(t0 <= n.start < t0+slot_dur for n, t0 in zip(assigned_notes, grid) if n is not None)
 
     # events = list(range(division))
     events = [None] * division   # type: List[Opt[Event]]
@@ -358,7 +371,7 @@ def calculate_events_for_slots(assigned_notes: List[Opt[Event]],
                         extended = last_note.clone(start=slot_start, dur=slot_dur, tied=tied)
                     else:
                         raise TypeError(f"expected Note or Rest, got {last_note}")
-                    logger.debug("extended note: %s" % extended)
+                    # logger.debug("extended note: %s" % extended)
                     events[i] = extended
                     # we don't update last_note, since this is only an extension
             else:

@@ -2,7 +2,7 @@ from __future__ import absolute_import
 from __future__ import print_function
 import itertools
 from .transcribe import generate_score
-from .config import getdefaultconfig, get_default_dynamicscurve
+from .config import get_default_config
 from math import sqrt
 from emlib import lib
 from .dynamics import DynamicsCurve
@@ -35,7 +35,7 @@ def best_dyncurve(spectrum, curves=(0.5, 1, 2.5, 4), mindbs=(-90, -60), maxdbs=(
     """
     results = []
     curves = [_ascurve(curve) for curve in curves]
-    config = config or getdefaultconfig()
+    config = config or get_default_config()
     debug = config.get('debug', True)
     if isinstance(dynamics, str):
         dynamics = dynamics.split()

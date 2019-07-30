@@ -1,0 +1,225 @@
+debug: false
+
+# Map subdivision of the pulse to complexity, used to determine the
+# best division for a given pulse. A higher value means more complexity
+# and thus less likely to be used
+divcomplexity: {1: 2, 2: 1.7, 3: 1, 4: 1, 5: 1.2, 6: 1.2, 7: 4, 8: 1.2, 9: 2, 10: 3.5,
+  11: 999, 12: 3.0, 16: 3}
+  
+# Possible divisions of the pulse
+divisions: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12]
+
+# Downsaple the spectrum for transcription | default: true
+downsample_spectrum: true
+
+# Possible dynamics
+dynamics: [pppp, ppp, pp, p, mp, mf, f, ff, fff, ffff]
+
+# Amplitude of the lowest dynamic | default: -75
+dyncurve_mindb: -75
+
+# Amplitude of the highest dynamic | default: -6
+dyncurve_maxdb: -6
+
+# Shape of the curve between mindb and maxdb. Possible values: linear and expon(exp).
+# If exp > 1, the curve has more resolution for high dynamics; if exp < 1, more
+# resolution is given to low dynamics | default: expon(2.5)
+dyncurve_shape: expon(2.5)
+
+# Join short notes if too dense to fit in any subdivisio | default: false
+join_small_notes: false
+
+# Duration for the ending note of a glissando | default: 0.0625
+lastnote_duration: 0.0625
+
+# Relative size of dynamics when rendering via lilypond
+# 0=original size, +1=12% bigger, -1=12% smaller, etc | default: -1
+lily_dynamics_size: -1
+
+# All notes above this frequency will be discarded | default: 6000
+maxfreq: 6000
+
+# All notes below this freq. will be discarded. If 0, a sensible value
+# is calculated | default: 0
+minfreq: 0
+
+# Change the size of the notehead according to its dynamic | default: true
+notesize_follows_dynamic: true
+
+# Max. number of voices to use for transcription | default: 12
+numvoices: 12
+
+# Apply an adaptive filter prior to packing partials in tracks. This
+# step can be applied manually by calling spectrum.adaptive_filter
+# | default: false
+pack_adaptive_prefilter: false
+
+# The pack_ settings are used to determine the weight of a partial.
+# A rating is calculated base on points, where more points mean higher
+# priority. Maps amplitude to points (louder partials are more important)
+pack_amp2points:
+- [-90, 0.0001]
+- [-60, 2]
+- [-35, 40]
+- [-12, 95]
+- [0, 100]
+
+# The weight of amplitude 
+pack_ampweight: 1
+
+# Packing starts by dividing the spectrum in different frequency bands (channels)
+# Different curves are tested and the best distribution is used.
+# | default: [0.7, 1.3]
+pack_channel_exponentials: [0.1, 0.4, 0.7, 1.3]
+
+# Possible values: weight, time | default: weight
+pack_criterium: weight
+
+# Maps duration to points (higher points means more likely that a partal will 
+# be included while packing)
+pack_dur2points:
+- [0, 0.0001]
+- [0.1, 5]
+- [0.3, 20]
+- [0.5, 40]
+- [2, 70]
+- [5, 100]
+
+# Weight of duration | default: 2
+pack_durweight: 2
+
+# Gain of a partial if it is identified as being the fundamental | default: 100
+pack_f0_gain: 100
+
+# How much can a partial deviate from the f0 to be considered as being part of it
+pack_f0_threshold: 0.1
+
+# Map freq. to points 
+pack_freq2points:
+- [0, 1.0e-05]
+- [20, 5]
+- [50, 100]
+- [400, 100]
+- [800, 80]
+- [2800, 80]
+- [3800, 50]
+- [4500, 10]
+- [5000, 0]
+
+# Weight of frequency 
+pack_freqweight: 2
+
+# Importance factor of a partial depending on it being an overtone of the
+# detected f0
+pack_harmonicity_gain:
+- [0.7, 1]
+- [1, 2]
+
+# Time gap between two partials (>= 0.2) | default: 0.2
+pack_interpartial_margin: 0.2
+
+# Gain applied to partials which do NOT belong to f0 | default: 1
+pack_notf0_gain: 1
+
+# Gain applied to overtones (a bpf)
+pack_overtone_gain: [2, 2, 5, 1]
+
+# Should overtones be applied the defined gain? | default: false
+pack_prefer_overtones: false
+
+# During analysis the f0 is calculated together with a voicedness factor.
+# If voicedness is low at a given time, the sound is noisy and the partials
+# identified are chaotic. This can be used to eliminate noisy partials
+pack_voiced_gain: [0, 1, 1, 1]
+
+# Possible values: portrait, landscape | default: portrait
+pagelayout: portrait
+
+# Possible values: A4, A3 | default: A4
+pagesize: A4
+
+# Min. duration of a partial to be considered for transcription
+# Either a duration in seconds (a float) or null to use a sensible value
+# | default: null
+partial_mindur: null
+
+# During transcription, the breakpoints are converted to notes and the best
+# subdivision of each pulse is determined. In cases where the density of
+# information is too high, a compromise has to be chosen. For each possible
+# transcription a penalty is calculated based on criteria like complexity,
+# accuracy, etc, and the distribution is chosen which minimizes those penalties.
+
+# A penalty associated with high complexity | default: 4.0
+penalty_complexity: 4.0
+
+# How much should we penalize that a note does not accurately reproduce its
+# original duration | default: 10
+penalty_incorrect_duration: 10
+
+# Penalty for leaving a note out of the transcription. 
+# | default: 2
+penalty_leftout: 2
+
+# If notes are allowed to merge, should this be penalized? | default: 1
+penalty_merged_notes: 1
+
+# A given subdivision can determine a timeshift in the attack of a note
+# A higher penalty implies more accuracy but also more complexity
+# | default: 1.0 
+penalty_timeshift: 1.0
+
+# Resolution of the pitch transcription. 0.5 = 1/4 tone, 0.25 = 1/8 tone
+# | default: 0.25
+pitch_resolution: 0.25
+
+# A partial has often silent start and end breakpoints. These have the function
+# of producing a short fade-in/fade-out to avoid clicks. If true, such breakpoints
+# are not included in the transcription | default: true
+remove_silent_breakpoints: true
+
+# Include dynamics in transcription | default: true
+show_dynamics: true
+
+# If true, different noteshapes are used in the transcription to show the 
+# noisyness of each note | default: false
+show_noteshapes: false
+
+# If true, transients (sudden changes in dynamic) are shown in the transcription
+# by means of articulations | default: false
+show_transients: false
+
+# When determining the best subdivision for a pulse, how much should we weight
+# silence? The lower this value, the more we can move silence around in order
+# to accomodate attacks
+silence_db: -10
+
+# Should notes belonging to a same partial be slurred together? | default: false
+slur_partials: false
+
+# The max. range of a staff (the max difference between its highest and lowest
+# note). The lower this value, the more coherent a staff is, but the more staffs
+# are needed to accomodate the same amount of partials
+# | default: 40
+staffrange: 40
+
+# The size of a staff in points | default: 12
+staffsize: 12
+
+# Tempo used in the transcription
+tempo: 60
+
+# Timesignature of the transcription
+timesig: "4/4"
+
+# Weight of amplitude / duration during transcription
+weight_ampdur: 10.0
+
+# The weight of a note (and thus the penalty of leaving it out during transcription)
+# | default: 4.0
+weight_note: 4.0
+
+# The weight of time accuracy during transcription | default: 1.0
+weight_time_accuracy: 1.0
+
+# The weight of transient notes during transcription
+weight_transient: 0.1

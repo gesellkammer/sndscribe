@@ -3,7 +3,7 @@ from __future__ import absolute_import
 from __future__ import print_function
 from .tools import *
 from .fraction import *
-from emlib.pitch import amp2db
+from emlib.pitchtools import amp2db
 from emlib.iterlib import pairwise
 from .envir import logger
 from . import typehints as t
@@ -35,7 +35,7 @@ class Event(object):
     def end(self, newend:t.Number):
         self._check_mutable()
         assert newend > self.start
-        self.dur = asR(newend) - self.start
+        self._dur = asR(newend) - self.start
 
     @property
     def dur(self) -> Fraction:
@@ -106,7 +106,7 @@ class Note(Event):
         if amp == 0 and pitch > 0:
             pitch = 0
             logger.info(f"warning: pitched note with amp 0 (pitch={pitch}")
-        if (amp > 0 and pitch > 0) or (amp == pitch == 0):
+        if (pitch > 0 and amp == 0) or (pitch == 0 and amp > 0):
             raise ValueError(f"Malformed Note: amp={amp} pitch={pitch}")
         self._pitch = pitch      # type: float
         self.amp = amp           # type: float
@@ -117,8 +117,9 @@ class Note(Event):
         self.tied = tied         # type: bool
         self.articulations = articulations if articulations is not None else []  # type: t.List[str]
         self.transient = transient  # type: float
+        self.dynamic = None      # type: str
 
-    @property 
+    @property
     def pitch(self):
         return self._pitch
 
@@ -139,6 +140,7 @@ class Note(Event):
         out = Note(self.pitch, self.start, self.dur, self.amp, self.bw,
                    self.color, size=self.size, tied=self.tied,
                    articulations=self.articulations, transient=self.transient)
+        out.dynamic = self.dynamic
         for key, value in keys.items():
             setattr(out, key, value)
         assert out.pitch > 0 and out.amp > 0
@@ -159,10 +161,17 @@ class Note(Event):
             artstr = ""
         trans = " %.2f" % self.transient if self.transient else ""
         tied = " TIE" if self.tied else ""
-        pitch = ("%.1f" % self.pitch if not self.isrest() else "REST").rjust(4)
-        ampstr = " %.0fdB" % amp2db(self.amp) if not self.isrest() else ""
+        if self.isrest():
+            pitch = "REST"
+        else:
+            if abs(int(self.pitch) - self.pitch) < 0.01:
+                pitch = str(self.pitch).rjust(4)
+            else:
+                pitch = f"{self.pitch:.2f}".rjust(4)
+        ampstr = f" {amp2db(self.amp):.0f}dB" if not self.isrest() else ""
         color = " " + str(self.color) if self.color is not None else ""
-        return f"({pitch} {self.start:.3f}-{self.end:.3f}{ampstr}{tied}{artstr}{trans}{color})"
+        dur = float(self.end - self.start)
+        return f"<{pitch} {dur:.3f}s {float(self.start):.3f}-{float(self.end):.3f}{ampstr}{tied}{artstr}{trans}{color}>"
 
     def break_at_pulse(self, pulsedur:Fraction, mindur:t.Rat=0.0) -> t.List['Note']:
         if self.dur < mindur:

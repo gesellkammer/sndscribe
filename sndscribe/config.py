@@ -1,384 +1,476 @@
-from __future__ import absolute_import
-import warnings
+from __future__ import annotations
+import subprocess
 import os
-from . import dynamics
-from . import envir
-import yaml
-from typing import Tuple, Any
+import tempfile
 import logging
 from fractions import Fraction
+from functools import lru_cache
+from typing import Tuple, Any, Dict, Optional as Opt
+from ruamel import yaml
+
+from emlib import dialogs
+from emlib import conftools
+
+from . import dynamics
+from . import envir
+from .error import ImmutableError
+from .definitions import ALLOWED_DIVISIONS, POSSIBLE_DYNAMICS
+from .tools import parse_timesig, as_timesig_tuple
+
 
 logger = logging.getLogger("sndscribe")
 
 
-USE_DIFFERENT_NOTEHEADS = False
-DEBUG_BEST_DIVISION = False
-
-
-# See makeconfig for documentation on each key
-_defaultconfig = {
-    'numvoices': 12,
-    'pitch_resolution': 0.5,
-    'staffrange': 36,  # the maximum range in semitones in any given staff
-    'divisions': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12],
-    'dyncurvedescr': {'shape': 'expon(2.5)',
-                      'mindb': -75,
-                      'maxdb': -6,
-                      'dynamics': ['pppp', 'ppp', 'pp', 'p', 'mp', 'mf', 'f', 'ff', 'fff', 'ffff']},
-    'debug': False,
-    'show_noteshapes': False,
-    'remove_silent_breakpoints': True,
-    'silence_db': -10,
-    'amp_dur_weight': 10.,
-    'transient_weight': 0.1,
-    'note_weight': 4.0,
-    'slur_partials': False,
-    'time_accuracy_weight': 1.0,
-    'timeshift_penalty': 1.,
-    'leftout_penalty': 2,
-    'incorrect_duration_penalty': 10,
-    'complexity_penalty': 4.0,
-    'merged_notes_penalty': 1,
-    'notesize_follows_dynamic': True,
-    'show_dynamics': False,
-    'downsample_spectrum': True,
-    'join_small_notes': True,
-    'use_css_sizes': False,
-    'show_transients': False,
-    'partial_mindur': None,
-    'staffsize': 12,
-    'pagelayout': 'portrait',
-    'pagesize': 'A4',
-    'minfreq': None,
-    'pack_f0_gain': 100,
-    'pack_notf0_gain': 1,
-    'pack_f0_threshold': 0.1,
-    'pack_freqweight': 2,
-    'pack_ampweight': 1,
-    'pack_durweight': 2,
-    'pack_freq2points': [
-        # freq -> points (0-100)
-        [0, 0.00001],
-        [20, 5],
-        [50, 100],
-        [400, 100],
-        [800, 80],
-        [2800, 80],
-        [3800, 50],
-        [4500, 10],
-        [5000, 0]
-    ],
-    'pack_amp2points': {
-        'interpolation': 'linear',
-        'points': [
-            [-90, 0.0001],
-            [-60, 2],
-            [-35, 40],
-            [-12, 95],
-            [0, 100]
-        ]
-    },
-    'pack_dur2points': [
-        [0, 0.0001],
-        [0.1, 5],
-        [0.3, 20],
-        [0.5, 40],
-        [2, 70],
-        [5, 100]
-    ],
-    'pack_prefer_overtones': False,
-    'pack_harmonicity_gain': [
-        [0.7, 1],
-        [1, 2]
-    ],
-    'pack_overtone_gain': [
-        2, 2,
-        5, 1
-    ],
-    # prefer voiced overtones: maps voicedness to gain,
-    # where 1 is a harmonic sound, 0 is noise
-    'pack_voiced_gain': [
-        0, 1,
-        1, 1
-    ],
-    'divcomplexity':  {
-        # division: complexity_factor
-        1: 2,
-        2: 1.7,
-        3: 1,
-        4: 1,
-        5: 1.3,
-        6: 1.8,
-        7: 4,
-        8: 1.5,
-        9: 2,
-        10: 3.5,
-        11: 6,
-        12: 3.0,
-        13: 6,
-        14: 6,
-        15: 7,
-        16: 3,
-        17: 7,
-        18: 6,
-        19: 7,
-        20: 4,
-        21: 8,
-        22: 8,
-        23: 9,
-        24: 6,
-        25: 6,
-        27: 10,
-        28: 8,
-        29: 12,
-        30: 6,
-        31: 14}
+_appconfig_default = {
+    'app.yaml': ''
 }
 
-
-def _editconfig(path):
-    apps = envir.get_preferred_applications()
-        
-    def _edityaml(yaml):
-        app = apps.get('yaml-editor', apps['editor'])    
-        os.system("{app} {path}".format(app=app, path=yaml))
-
-    def _editjson(json):
-        app = apps.get('json-editor', apps['editor'])
-        os.system("{app} {path}".format(app=app, path=json))
-
-    base, ext = os.path.splitext(path)
-    if ext == ".yaml":
-        _edityaml(path)
-    elif ext == ".json":
-        _editjson(path)
-    else:
-        raise ValueError("format not supported: %s" % path)
-
-
-class ConfigDict(dict):
-    _allowedkeys = set(_defaultconfig.keys())
-
-    def __init__(self, d, fallback=None, name=None):
-        super().__init__()
-        self.update(d)
-        self.name = name
-        self.fallback = fallback
-
-    def __setitem__(self, key, value):
-        if key not in self._allowedkeys:
-            raise KeyError(f"Key {key} not known")
-        super(self.__class__, self).__setitem__(key, value)
-
-    def __getitem__(self, key):
-        if key not in self._allowedkeys:
-            raise KeyError(f"Key {key} not allowed")
-        if key in self:
-            return super().__getitem__(key)
-        if self.fallback is not None and key in self.fallback:
-            return self.fallback[key]
-        raise KeyError("Key allowed but not found??")
-
-    def edit(self, fmt="yaml", inplace=True):
-        import tempfile
-        ext = "." + fmt
-        path = tempfile.mktemp(suffix=ext)
-        saveconfig(self, path)
-        _editconfig(path)
-        newconfig = readconfig(path)
-        if inplace:
-            self.update(newconfig)
-            return self
-        else:
-            return newconfig
-
-    def get(self, key, default=None):
-        if key in self:
-            return super().__getitem__(key)
-        if self.fallback is not None:
-            return self.fallback.get(key)
-        return default
-
-    def __repr__(self):
-        return yaml.dump(self)
-
-    def save(self, outfile):
-        return saveconfig(self, outfile)
-
-    def copy(self):
-        return self.__class__(super().copy())
-
-
-yaml.add_representer(ConfigDict, lambda dumper, c: dumper.represent_dict(c))
-
-
-def saveconfig(config, outfile):
-    """
-    config: a dict, like defaultconfig, or as returned by makeconfig
-    oufile: the path to save config to. Supported formats: yaml, json
-    """
-    outfile = os.path.abspath(os.path.expanduser(outfile))
-    base, ext = os.path.splitext(outfile)
-    d = {}
-    d.update(config)
-
-    def saveyaml(config, outfile):
-        with open(outfile, "w") as f:
-            yaml.dump(config, f)
-
-    def savejson(config, outfile):
-        import json
-        with open(outfile, "w") as f:
-            json.dump(config, f)
-
-    if ext == ".yaml":
-        saveyaml(d, outfile)
-    elif ext == ".json":
-        savejson(d, outfile)
-    else:
-        raise ValueError("only yaml or json formats are supported")
-
-
-def readconfig(path):
-    base, ext = os.path.splitext(path)
-
-    def readyaml(path):
-        f = open(path)
-        d = yaml.load(f)
-        return ConfigDict(d)
-    
-    def readjson(path):
-        import json
-        f = open(path)
-        d = json.load(f)
-        return ConfigDict(d)
-
-    if ext == '.json':
-        return readjson(path)
-    elif ext == '.yaml':
-        return readyaml(path)
-    else:
-        raise ValueError("only yaml or json formats are supported")
-
-
-def makeconfig(**kws):
-    """
-    Make a new configuration, overriding the default config
-    
-    NB1: Because of the complexity of creating a config, at the REPL
-        it is convenient to use 
-        
-        myconfig = makeconfig().edit()
-        
-        This will launch a text editor where you can edit your config
-        and the changes will be loaded after saving the file and exiting
-        the editor
-
-    NB2: for values which are a dict, a dict is expected which
-        will override only those values in the original, for example
-
-        makeconfig(divcomplexity={10:100})
-
-        will create a config where the complexity of a 10 subdivision of
-        the pulse will be 100, and all over subdivisions will be set
-        to the default
-
-    Keys:
-
-    * pitch_resolution: in halftones (0.5=1/4 tones)
-    * divisions: (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12)
-                 The possible subdivisions of the pulse
-
-    * dyncurve: {'shape': 'expon(2.5)', 'mindb': -75, 'maxdb': -6, 
-                dynamics: ['pppp', 'ppp', ..., 'ffff']}
-                 A dict of keywords to be passed to DynamicsCurve. This
-                 will be the default dyn. curve
-
-    * debug: False            -- Wether to print debug info or not
-    * use_different_noteheads: False    -- Use noteheads to show information about noisyness
-    * remove_silent_breakpoints: True   -- Interprets Notes with 0 amp as silences
-    * silence_db: -40         -- How much should a silence be weighted against notes during quantization
-    * amp_dur_weight: 10.     -- Weight of amplitude and duration during quantization
-    * transient_weight: 0.1   -- quantization: how important is it that a note has a transient
-    * note_weight: 4.0        -- ???
-    * time_accuracy_weight: 1.0   quantization: how important is it that a Note is represented
-                                  at its exact beginning
-    * timeout_penalty: 1.     -- ???
-    * leftout_penalty: 8      -- what's the penalty of leaving a note out during quantization
-    * incorrect_duration_penalty: 10  
-                              -- The penalty of representing a note with a modified duration
-    * complexity_penalty: 2      -- Penalty of using complex subdivisions
-    * merged_notes_penalty: 0.5  -- Penalty of merging notes together during quantization
-    * notesize_folows_dynamic: True  -- Should the size of a note follow the dynamic?
-    * show_dynamics: True        -- Should we show the dynamics?
-    * downsample_spectrum: True  -- Should the spectrum be downsampled prior to quantization?
-    * join_small_notes: True     -- Should we join notes during quantization or pick the best one?
-    * use_css_sizes: False       -- musicxml: use css sizes or numeric sizes?
-    * divcomplexity              -- A dict mapping complexity to subdivision of the pulse
-    * minfreq: None              -- Normally, the freq. resolution of the analysis, or None to 
-                                    autodetect it from the Spectrum
-    """
-    unmatchedkeys = [k for k in kws.keys() if k not in _defaultconfig]
-    if unmatchedkeys:
-        warnings.warn("Keys not recognised, ignoring: %s" % unmatchedkeys)
-    newconfig = _defaultconfig.copy()
-    dicts = [(k, v) for k, v in kws.items() if isinstance(v, dict)]
-    for k, v in dicts:
-        d = newconfig[k].copy()
-        d.update(v)
-        newconfig[k] = d
-        del kws[k]
-    newconfig.update(kws)
-    out = ConfigDict(newconfig)
-    assert out['pack_f0_gain'] == newconfig['pack_f0_gain']
-    return out
-
-
-defaultconfig = ConfigDict(_defaultconfig, name='default')
-
-globalsettings = {
-    'dyncurve': dynamics.DynamicsCurve.fromdescr(**_defaultconfig['dyncurvedescr']),
-    'config': ConfigDict(_defaultconfig),
+globalsettings: Dict[str, Any] = {
     'debug': False
 }
 
 
-def setdefaultconfig(config):
-    globalsettings['config'] = config
+appconfig = conftools.ConfigDict('sndscore', _appconfig_default)
+
+DEBUG_BEST_DIVISION = False
 
 
-def getdefaultconfig():
-    return globalsettings['config']
+# See defaultconfig.yaml for documentation on each key
+
+_isbool = lambda opt: isinstance(opt, bool)
 
 
-def get_default_dynamicscurve():
+def _islistof(T):
+    return lambda xs: isinstance(xs, list) and all(isinstance(x, T) for x in xs)
+
+
+def _oneof(*opts):
+    return lambda x: x in opts
+
+
+
+
+
+_validator = {
+    'pitch_resolution':lambda r:r in {0.25, 0.5, 1},
+    'divisions':lambda divs:all(div in ALLOWED_DIVISIONS for div in divs),
+    'downsample_spectrum': _isbool,
+    'dynamics': lambda dynamics: all(dyn in POSSIBLE_DYNAMICS for dyn in dynamics),
+    'dyncurve_mindb': lambda mindb: -120 <= mindb <= 0,
+    'dyncurve_maxdb': lambda maxdb: -120 <= maxdb <= 0,
+    'dyncurve_shape': lambda shape: shape == 'linear' or shape.startswith('expon'),
+    'join_small_notes': _isbool,
+    'lastnote_duration':lambda dur:dur>0,
+    'lily_dynamics_size': lambda s: isinstance(s, int) and -5 <= s <= 5,
+    'maxfreq': lambda freq: isinstance(freq, (int, float)) and freq > 100,
+    'minfreq': lambda freq: isinstance(freq, (int, float)) and freq == 0 or freq >= 20,
+    'notesize_follows_dynamic': _isbool,
+    'numvoices':lambda n:isinstance(n, int) and n>0,
+    'pack_adaptive_prefilter': _isbool,
+    'pack_channel_exponentials': lambda exps: _islistof((int, float)),
+    'pack_criterium': _oneof('weight', 'time'),
+    'pack_f0_gain': lambda g: isinstance(g, (int, float)) and g > 0,
+    'pack_f0_threshold': lambda th: isinstance(th, float) and 0 < th < 1,
+    'pack_interparcial_margin': lambda m: isinstance(m, float) and m >= 0.2,
+    'pack_prefer_overtones': _isbool,
+    'pagelayout': _oneof('portrait', 'landscape'),
+    'pagesize': lambda s: s.lower() in ('a4', 'a3'),
+    'partial_mindur': lambda d: d is None or d > 0,
+    'remove_silent_breakpoints': _isbool,
+    'show_dynamics': _isbool,
+    'show_noteshapes': _isbool,
+    'show_transients': _isbool,
+    'silenct_db': lambda db: isinstance(db, int) and db < 0,
+    'slur_partials': _isbool,
+    'staffrange': lambda r: isinstance(r, int) and r >= 12,
+    'staffsize': lambda s: isinstance(s, int) and 6 <= s <= 40,
+    'tempo': lambda t: isinstance(t, (int, float)) and t > 0,
+    'timesig': lambda t: isinstance(t, str) and parse_timesig(t) is not None
+}
+
+# A list of functions which should return True if the config is coherent
+# These are functions which test settings which are interdependent
+_post_validator = [
+    lambda cfg: cfg['dyncurve_mindb'] < cfg['dyncurve_maxdb'],
+]
+
+_help = {
+    'pitch_resolution': 'Pitch resolution for transcription (0.5 means 1/4 tone). One of: 1, 0.5, 0.25',
+    'divisions': 'Possible divisions of the pulse (a list of int divisions)',
+    'downsample_spectrum': 'Downsample spectrum prior to transcription (bool)',
+    'dynamics': 'Possible dynamics used in transcription (a list of dynamics)',
+    'dyncurve_mindb': 'The amplitude corresponding to the lowest dynamic (dB value)',
+    'dyncurve_maxdb': 'The amplitude corresponding to the higher dynamic (dB value)',
+    'dyncurve_shape': 'The shape of the curve between mindb and maxdb. Possible values: "linear", "expon(x)"',
+    'join_small_notes': 'Join small notes instead of leaving them out (bool)',
+    'lastnote_duration': 'Duration of the endnote of a glissando (float)',
+    'lily_dynamics_size': 'Relative size of dynamic expressions (int between -5 and 5)',
+    'maxfreq': 'Max. freq used in transcription',
+    'minfreq': 'Min. freq used in transcription',
+}
+
+
+def default_config_path() -> str:
     """
-    Returns a dynamics.DynamicsCurve
+    Returns:
+        The path to the default config.
+
+    Raises:
+        FileNotFoundError if the default config is not found
     """
-    # return dynamics.get_default_curve()
-    return globalsettings['dyncurve']
+    path = envir.get_datafile("defaultconfig.yaml")
+    if path is None:
+        raise FileNotFoundError("default config not found")
+    return path
 
 
-class RenderConfig(object):
+def _edit_config(path, wait=True):
+    app = appconfig.get('app.yaml')
+    if not app:
+        apps = envir.get_preferred_applications()
+        app = apps.get('yaml-editor', apps['editor'])
+    base, ext = os.path.splitext(path)
+    if ext != ".yaml":
+        raise ValueError("path should have a .yaml extension, got {path}")
+    subprocess.call([app, path])
+    if wait:
+        dialogs.showinfo("Press OK when finished editing")
 
-    def __init__(self, tempo:float, timesig:Tuple[int, int], config:ConfigDict) -> None:
-        assert isinstance(tempo, (int, float))
-        assert isinstance(timesig, tuple) and len(timesig) == 2
-        assert isinstance(config, ConfigDict), f"Expected a ConfigDict, got {config} of type {type(config)}"
-        self.tempo: Fraction = Fraction(tempo)
-        self.timesig: Tuple[int, int] = timesig
-        self.config = config or getdefaultconfig()
-        dyncurvedescr = self.config.get('dyncurvedescr')
-        if dyncurvedescr:
-            self.dyncurve = dynamics.DynamicsCurve.fromdescr(**dyncurvedescr)
+
+def _load_config(path: str) -> dict:
+    assert os.path.splitext(path)[1] == '.yaml'
+    loader = yaml.YAML()
+    return loader.load(open(path))
+
+
+def _purify(obj):
+    """
+    Convert obj (recursively) to its pure python form, consisting
+    only of basic types: int, float, str, bool, dict, list and None
+
+    The use case is to remove subclasses of objects made during
+    serialization by ruamel.yaml
+
+    Args:
+        obj: the object to purify
+
+    Returns:
+        A pure python version of object
+    """
+    if isinstance(obj, bool) or obj is None:
+        return obj
+    if isinstance(obj, float):
+        return float(obj)
+    elif isinstance(obj, str):
+        return str(obj)
+    elif isinstance(obj, int):
+        return int(obj)
+    elif isinstance(obj, list):
+        return [_purify(x) for x in obj]
+    elif isinstance(obj, dict):
+        return {k: _purify(v) for k, v in obj.items()}
+    else:
+        raise TypeError(f"object {obj} of type {type(obj)} not supported")
+
+
+@lru_cache(maxsize=1)
+def _get_default_yamldict():
+    return _load_config(default_config_path())
+
+
+@lru_cache(maxsize=1)
+def _get_allowed_keys() -> set:
+    fallback = _get_fallback_dict()
+    return set(fallback.keys())
+
+
+@lru_cache(maxsize=1)
+def _get_fallback_dict() -> dict:
+    return _purify(_get_default_yamldict())
+
+
+class ConfigDict(dict):
+    _allowedkeys = _get_allowed_keys()
+
+    def __init__(self, d, fallback=None, name=None, frompath=None):
+        """
+        Don't call this directly as a user: use make_config() or read_config(path_to_config)
+
+        Args:
+            d: a dict as read by ruamel.yaml (see _load_config)
+            fallback: a python dict with defaults
+        """
+        self.name: str = name
+        self._yamldict = d
+        # self._fallback: dict = fallback if fallback is not None else _defaultconfig
+        self._fallback: dict = fallback
+        self._validator = _validator
+        self._immutable = False
+        self._help = _help
+        self._frompath = frompath
+        self._dict = _purify(self._yamldict)
+        self.validate()
+
+    def make_immutable(self, state=True):
+        self._immutable = state
+
+    def keys(self):
+        return self._dict.keys()
+
+    def items(self):
+        return self._dict.items()
+
+    def validate(self) -> None:
+        v = self._validator
+        if v is None:
+            return
+        for key, value in self._dict.items():
+            func = v.get(key)
+            if func and not func(value):
+                raise ValueError(f"Validation error: key {key} can't be set to {value}")
+
+    def __setitem__(self, key, value) -> None:
+        if self._immutable:
+            raise ImmutableError("This config is immutable")
+        if key not in self._allowedkeys:
+            raise KeyError(f"Key {key} not known")
+        if self._validator and key in self._validator:
+            ok = self._validator[key](value)
+            if not ok:
+                raise ValueError(f"Can't set {key} to {value}")
+        self._yamldict[key] = value
+        if isinstance(value, dict):
+            v = {}
+            v.update(value)
+            value = v
+        self._dict[key] = value
+
+    def __eq__(self, other):
+        if isinstance(other, ConfigDict):
+            return self._dict == other._dict
         else:
-            logger.warning("No dynamicscurve defined in config! Using default")
-            self.dyncurve = get_default_dynamicscurve()
+            raise TypeError("= operation only between instances of ConfigDict")
 
-    def __getitem__(self, key):
-        # type: (str) -> Any
+    def copy(self) -> ConfigDict:
+        return ConfigDict(self._yamldict.copy(), name=self.name, fallback=self._fallback)
+
+    def __getitem__(self, key: str):
+        if key not in self._allowedkeys:
+            raise KeyError(f"Key {key} not allowed")
+        if key in self._dict:
+            return self._dict[key]
+        if self._fallback is not None and key in self._fallback:
+            return self._fallback[key]
+        raise KeyError("Key allowed but not found??")
+
+    def edit(self) -> None:
+        """
+        Edit this config inplace. This will open the config file in the default
+        application for opening .yaml files. After finishing editing,
+        save the file and click OK in the confirmation dialog
+
+        In order to configure a specific application to open the config,
+        use:
+            appconfig['app.yaml'] = path_to_app
+        """
+        path = tempfile.mktemp(suffix=".yaml")
+        self.save(path)
+        _edit_config(path, wait=True)
+        newconfig = read_config(path)
+        self._replacewith(newconfig)
+
+    def _replacewith(self, replacement: ConfigDict, copy=False):
+        yamldict = replacement._yamldict
+        if copy:
+            yamldict = yamldict.copy()
+        self._yamldict = yamldict
+        self._dict = _purify(yamldict)
+
+    def update(self, d):
+        assert set(d.keys()).issubset(self._allowedkeys)
+        self._dict.update(_purify(d))
+        self._yamldict.update(d)
+        self.validate()
+
+    def get(self, key: str, default=None):
+        if key in self._dict:
+            return self._dict.get(key)
+        if self._fallback is not None:
+            return self._fallback.get(key)
+        return default
+
+    def __repr__(self) -> str:
+        return yaml.dump(self._dict, default_flow_style=None)
+
+    def save(self, outfile=None) -> None:
+        """
+        Save configuration to a .yaml file
+
+        Example:
+            config.save("myconfig.yaml")
+
+        Args:
+            outfile: the path to save this config to
+
+        """
+        if outfile is None:
+            if self._frompath is None:
+                raise ValueError("This ConfigDict has no associated filepath. You need to give an outfile")
+            outfile = self._frompath
+        outfile = os.path.expanduser(outfile)
+        ext = os.path.splitext(outfile)[1]
+        if ext != ".yaml":
+            raise ValueError("outfile should have the extension .yaml")
+        with open(outfile, "w") as f:
+            y = yaml.YAML()
+            y.default_flow_style = None
+            y.dump(self._yamldict, f)
+
+    def help(self, key: str, fmt='short') -> Opt[str]:
+        """
+        Get help for a given key in this config. Returns None
+        if no help available
+
+        Example::
+
+            helptxt = config.help("staffrange")
+
+        Args:
+            key: the key to get help
+            fmt: the format of the help. One of 'short' and 'long'
+        """
+        if fmt == 'short':
+            txt = self._help.get(key)
+            return txt or self.help(key, fmt='long')
+        attribs = self._yamldict.ca.items.get(key)
+        if not attribs:
+            return None
+        comment: yaml.CommentToken = attribs[2]
+        if not comment:
+            return None
+        txt = comment.value.replace("#", "").replace("\n", "").strip()
+        return txt
+
+    def default(self, key: str):
+        """
+        Get default value for a given key
+        """
+        return _get_fallback_dict()[key]
+
+
+
+def read_config(path: str, name=None) -> ConfigDict:
+    """
+    Read a configuration file with all needed settings to generate
+    a transcription of a spectrum.
+
+    Args:
+        path: path to the .yaml file as generated by config.save
+        name: give this config a name (optional)
+
+    Returns:
+        A ConfigDict. This can be further configured and passed
+        to generate_score
+    """
+    path = os.path.expanduser(path)
+    return ConfigDict(_load_config(path), name=name, fallback=_get_fallback_dict(), frompath=path)
+
+
+def make_config(**kws) -> ConfigDict:
+    """
+    Make a new configuration, overriding the default config
+
+    Example::
+        import sndtrck
+        import sndscribe
+        cfg = make_config()
+        cfg['staffrange'] = 36
+        cfg['numvoices'] = 8
+        partials = sndtrck.analyze('/my/soundfile.wav', 40)
+        partials = partials.filter(mindur=0.02, minbps=2, maxfreq=5000, minfreq=30)
+        result = sndscribe.generate_score(partials, cfg)
+        result.score.writepdf('myscore.pdf', openpdf=True)
+
+    NB: Because of the complexity of creating a config, at the REPL
+        it is convenient to use 
+        
+        myconfig = make_config().edit()
+        
+        This saves your config to a temporary file which is open in a text editor.
+        Here you can edit the config. The changes will be loaded after saving
+        the file and pressing ok in the confirmation dialog.
+    """
+    out = get_default_config().copy()
+    for key, value in kws.items():
+        out[key] = value
+    return out
+
+
+def dyncurve_from_config(config: ConfigDict) -> dynamics.DynamicsCurve:
+    """
+    Create a DynamicsCurve from the description in config. Raises
+    KeyError if any of the keys needed are missing
+    """
+    return dynamics.DynamicsCurve.fromdescr(shape=config['dyncurve_shape'],
+                                            mindb=config['dyncurve_mindb'],
+                                            maxdb=config['dyncurve_maxdb'],
+                                            dynamics=config['dynamics'])
+
+
+
+@lru_cache(maxsize=1)
+def get_default_config() -> ConfigDict:
+    defaultdict = _get_default_yamldict()
+    cfg = ConfigDict(defaultdict, fallback=None)
+    cfg.make_immutable()
+    return cfg
+
+
+class RenderConfig:
+
+    def __init__(self,
+                 config: ConfigDict,
+                 tempo:float = None,
+                 timesig:Tuple[int, int] = None,
+                 dyncurve: dynamics.DynamicsCurve=None
+                 ):
+        """
+        A RenderConfig holds all information needed to render a score.
+
+        Args:
+            config: a ConfigDict as returned by read_config or make_config
+            tempo: the tempo of the score, or None to use the tempo defined in the config
+            timesig: the timesignature of the score, or None to use the timesig definen in the config
+            dyncurve: a DynamicsCurve. If not given, the config is used to create one
+                by calling DynamicsCurve.fromdescr
+
+        NB: the possibility to override tempo and timesig is here to allow, in the future, to
+            use non-static values for these, such as a score structure with changing time signatures and tempi
+        """
+        assert timesig is None or isinstance(timesig, (str, tuple))
+        assert tempo is None or isinstance(tempo, (int, float))
+        assert isinstance(config, ConfigDict), f"Expected a ConfigDict, got {config} of type {type(config)}"
+        tempo = tempo if tempo is not None else config['tempo']
+        timesig = timesig if timesig is not None else config['timesig']
+        self.tempo: Fraction = Fraction(tempo)
+        self.timesig: Tuple[int, int] = as_timesig_tuple(timesig)
+        self.config: ConfigDict = config
+        if dyncurve is not None:
+            self.dyncurve = dyncurve
+        else:
+            try:
+                self.dyncurve = dyncurve_from_config(self.config)
+            except KeyError as e:
+                raise KeyError("Missing keys to construct dynamics curve from config")
+
+    def __getitem__(self, key: str):
         return self.config[key]
 
-    def get(self, key:str, default=None) -> Any:
+    def get(self, key:str, default=None):
         return self.config.get(key, default)
 
+    def clone(self, **kws) -> RenderConfig:
+        tempo = kws.get('tempo', self.tempo)
+        timesig = kws.get('timesig', self.timesig)
+        dyncurve = kws.get('dyncurve', self.dyncurve)
+        return RenderConfig(config=self.config.copy(), tempo=tempo, timesig=timesig, dyncurve=dyncurve)

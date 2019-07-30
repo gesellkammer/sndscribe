@@ -1,22 +1,20 @@
 # -*- coding: utf-8 -*-
-from __future__ import division, print_function
 # NB: in lilypond, edit auto-beam.scm to add
 # ((end * * 4 4) . ,(ly:make-moment 1 4))
 # ((end * * 4 4) . ,(ly:make-moment 3 4))
 # the footer "music engraving..." resides in titling-init.ly, tagline
 
-from __future__ import absolute_import
 import os
+import tempfile
 from emlib import xmlprinter
+from emlib import lib
 from emlib.iterlib import pairwise
 from emlib.midi.generalmidi import get_midi_program
 from . import pack
-from . import dynamics
-from .tools import *
+from . import tools
 from .config import *
 from .definitions import *
 from .note import *
-from .reduction import (reduce_breakpoints, simplify_notes, partial_simplify)
 from .scorefuncs import *
 from .conversions import *
 from .voice import Voice
@@ -26,53 +24,41 @@ from . import typehints as t
 
 
 class Score(object):
-    def __init__(self,
-                 timesig=(4, 4),      # type: t.Tup[int, int]
-                 tempo=60,            # type: t.Number
-                 dyncurve=None,       # type: t.U[str, DynamicsCurve, None]
-                 transient_mask=None,
-                 config=None,         # type: ConfigDict
-                 **kws):
+    def __init__(self, config: RenderConfig=None, title=None):
         """
-        * timesig: (num, den)
-        * dyncurve: a dynamics.DynamicsCurve, or a dict defining one (see config.defaults)
-        * transient_mark:
-            - If None, transients are not taken into account.
-            - Else, a bpf is expected which returns either
-              0 or 1 for in time t
-        * config: a configuration file as defined in config.defaultconfig or as a result
-                  of calling config.makeconfig
-        * any other keywords are used to override the config
 
-        NB: Use addstaff to append Staffs to the Score
         """
+        if isinstance(config, ConfigDict):
+            raise TypeError("config should be a RenderConfig, call RenderConfig(config, ...)")
+        assert isinstance(config, RenderConfig)
+
         pagelayout = config['pagelayout']
         staffsize = config['staffsize']
         pagesize = config['pagesize']
+        timesig = config.timesig
+        tempo = config.tempo
+
         assert istimesig(timesig)
-        assert isinstance(tempo, int) and 30 <= tempo < 200
+        assert isinstance(tempo, (int, float, Fraction)) and 30 <= tempo < 200, f"tempo: {tempo} ({type(tempo)})"
         assert pagelayout in ('portrait', 'landscape')
         assert isinstance(staffsize, int) and staffsize > 0
-        config = config if config is not None else getdefaultconfig()
-        if kws:
-            config = config.copy()
-            config.update(kws)
+
         self.timesig = timesig
         self.tempo = tempo
         self.staffsize = staffsize
         self.pagesize = pagesize
         self.pagelayout = pagelayout
-        self.transient_mask = transient_mask
-        self.renderconfig = RenderConfig(tempo=tempo, timesig=timesig, config=config)
-        if dyncurve is not None:
-            assert dyncurve is self.renderconfig.dyncurve
-        self.dyncurve = self.renderconfig.dyncurve 
+        self.transient_mask = None
+        self.renderconfig = config
+        self.dyncurve = self.renderconfig.dyncurve
         self.staffs = []
         self.weighter = pack.new_weighter(config)
 
-    def addstaff(self, staff):
+        self.title = title
+
+    def addstaff(self, staff: Staff) -> None:
         """
-        :type staff: Staff
+        Add a Staff to this Score
         """
         assert isinstance(staff, Staff)
         self.staffs.append(staff)
@@ -84,10 +70,13 @@ class Score(object):
         s = Staff(voice,
                   timesig=self.timesig,
                   tempo=self.tempo,
-                  possible_divs=self.renderconfig['divisions'])
+                  possible_divs=self.renderconfig['divisions'],
+                  name=name,
+                  clef=clef
+                  )
         self.addstaff(s)
 
-    def render(self):
+    def render(self) -> None:
         """
         Render the voices into staffs->measures->pulses
 
@@ -104,7 +93,7 @@ class Score(object):
         maybe someday lilypond will be able to represent 1/8 tones...
         They are output correctly in the MusicXML file, though.
         """
-        logger.info("\n================ Rendering Score ================\n")
+        logger.info("\n~~~~~~~~ Rendering Score ~~~~~~~\n")
         self.staffs.sort(key=lambda x: x.meanpitch(), reverse=True)
         # check if we have to fill the notes with their transient value
         if self.transient_mask is not None:
@@ -115,9 +104,9 @@ class Score(object):
                     note.transient = transient_mask(t)
 
         for i, staff in enumerate(self.staffs):
-            logger.info("Rendering staff %d/%d" % (i+1, len(self.staffs)))
+            logger.debug("Rendering staff %d/%d" % (i+1, len(self.staffs)))
             staff.render(renderconfig=self.renderconfig)
-        logger.info('rendering done, checking data integrity...')
+        logger.debug('rendering done, checking data integrity...')
         if self.verify_render():
             logger.info('\nVerify ok')
         else:
@@ -146,8 +135,7 @@ class Score(object):
     def rendered(self):
         return all(staff.rendered for staff in self.staffs)
     
-    def verify_render(self):
-        # dyncurve = self.renderconfig.dyncurve
+    def verify_render(self) -> bool:
         for staff in self.staffs:
             for voice in staff.voices:
                 lastnote = Note(10, start=-1, dur=1, color="verify")
@@ -173,62 +161,84 @@ class Score(object):
                             # Note | Note
                             if almosteq(note.pitch, lastnote.pitch):
                                 if not lastnote.tied:
-                                    logger.debug("bad ties found, fixing")
                                     lastnote.tied = True
                             lastnote = note
         return True
 
     def dump(self):
-        staff_strings = ["================= Staff %d ==============\n" %
-                         (i+1) + staff.dump() for i, staff in enumerate(self.staffs)]
+        staff_strings = [f"~~~~~~~~~~~~~~~~ Staff {i+1} ~~~~~~~~~~~~~~~~\n" + staff.dump()
+                         for i, staff in enumerate(self.staffs)]
         return "\n".join(staff_strings)
 
-    def write(self, outfile):
+    def write(self, outfile: str) -> None:
         """
-        Write the score to outfile.
+        Write the score to outfile
 
         Possible formats: 
-            * musicXML
-            * pdf
+            * xml (musicXML)
+            * pdf (using the lilypond backend)
+            * ly (lilypond)
 
         The format is deducted from the extension of outfile
         """
-        ext = os.path.splitext(outfile.lower())[1]
+        outfile = lib.normalize_path(outfile)
+        ext = os.path.splitext(outfile)[1].lower()
         if ext == ".xml":
-            return self.toxml(outfile)
+            self.toxml(outfile)
         elif ext == ".pdf":
-            xml = self.toxml(outfile)
-            pdf = musicxml2pdf(xml)
-            return pdf
+            return self.writepdf(outfile=outfile, method='lilypond')
+        elif ext == ".ly":
+            from . import renderlily
+            renderlily.score_to_lily(self, outfile=outfile)
         else:
             raise ValueError("Format not supported")
 
-    def toxml(self, outfile):
+    def writepdf(self, outfile, method='lilypond', openpdf=False) -> None:
+        """
+
+        Methods:
+            * lilypond: a lilypond file is generated and lilypond is
+              called to produce the pdf file (lilypond needs to be installed)
+            * musicxml: a musicxml file is generated, musescore is called
+              to produce the pdf file (musescore needs to be installed)
+
+        Args:
+            outfile: the generated pdf file
+            method: possible methods are 'lilypond' and 'musicxml'
+            openpdf: if True, open the resulting pdf file in the standard application
+
+        """
+        outfile = lib.normalize_path(outfile)
+        if method == 'lilypond':
+            lyfile = tempfile.mktemp(suffix='.ly')
+            self.write(lyfile)
+            lilytools.lily2pdf(lyfile, outfile)
+        elif method == 'musicxml':
+            xmlfile = tempfile.mktemp(suffix='.xml')
+            self.write(xmlfile)
+            tools.musicxml2pdf(xmlfile, outfile, backend='musescore')
+        else:
+            raise KeyError(f"method should be 'lilypond' or 'musicxml', got {method}")
+
+        if openpdf:
+             lib.open_with_standard_app(outfile)
+
+    def toxml(self, outfile: str) -> None:
         """
         Writes the already rendered score to a musicXML file.
 
-        Returns the path of the outfile (can differ from the outfile given)
-
-        To output the score as a pdf, call tools.musicxml2pdf
+        To output the score as a pdf, see .writepdf
         """
+        outfile = lib.normalize_path(outfile)
         base, ext = os.path.splitext(outfile)
-        outfile = base + '.xml'
-        logger.info("writing musicXML: " + outfile)
+        assert ext == '.xml'
+        logger.debug(f"toxml: writing musicXML to file {outfile}")
         
         out = open(outfile, 'w')
         _ = xmlprinter.xmlprinter(out)  # parser
 
-        def get_page_size(pagesize, pagelayout):
-            page_height, page_width = {
-                'a3': (420, 297),    # in millimeters
-                'a4': (297, 210)
-            }[pagesize.lower()]
-            assert pagelayout in ('landscape', 'portrait')
-            if pagelayout == 'landscape':
-                page_width, page_height = page_height, page_width
-            return page_height, page_width
-        
-        page_height, page_width = get_page_size(self.pagesize, self.pagelayout)
+        page_height, page_width = lib.page_dinsize_to_mm(self.pagesize, self.pagelayout)
+
         unit_converter = LayoutUnitConverter.from_staffsize(self.staffsize)
 
         _.startDocument()
@@ -272,11 +282,9 @@ class Score(object):
                     # Each staff renders itself as XML
                     staff.toxml(_)
         _.endDocument()
-        return outfile
-    
+
     def change_note_size_in_function_of_dynamic(self):
         dyncurve = self.renderconfig.dyncurve
-        assert isinstance(dyncurve, dynamics.DynamicsCurve)
         for note in self.iternotes():
             if not note.isrest():
                 dyn = dyncurve.amp2dyn(note.amp)
@@ -298,7 +306,7 @@ class Score(object):
         for note in self.iternotes():
             if not note.isrest():
                 # totalweight += note.amp * note.dur
-                # totalweight += calculate_note_weight(note)
+                # totalweight += calculate_weight_note(note)
                 # totalweight += noteweight(note.pitch, amp2db(note.amp), note.dur)
                 # totalweight += self.weighter.noteweight(note.pitch, amp2db(note.amp), note.dur)
                 totalweight += self.weighter.weight(m2f(note.pitch), amp2db(note.amp), note.dur)
