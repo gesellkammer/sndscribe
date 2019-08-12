@@ -243,11 +243,6 @@ def new_weighter(config: RenderConfig, spectrum: Opt[sndtrck.Spectrum]=None):
     d = {key: config['pack_' + key] for key in pack_keys}
     return PartialWeighter(spectrum=spectrum, **d)
 
-
-def setdefaultweights(**keys):
-    raise DeprecationWarning("use set_default_weights")
-
-
 def set_default_weights(**keys):
     """See PartialWeighter for possible keys"""
     global _PARTIALWEIGHTER
@@ -287,11 +282,6 @@ def get_best_track(tracks: List[Track],
             logger.debug(f"{maxnote} {partialmaxnote} {minnote} {partialminnote} {maxrange}")
             raise AssertionError("pitchrange too big!")
     return besttrack
-
-
-def get_nearest_track(tracks: List[Track], partial: sndtrck.Partial, maxrange:int, minmargin: float):
-    for track in tracks:
-        pass
 
 
 class Channel:
@@ -334,7 +324,6 @@ class Channel:
     def pack_by_weight(self, numtracks:int, maxrange=24.0, minmargin=0.1) -> None:
 
         def _pack_by_weight(partials, numtracks, maxrange, minmargin, weighter):
-            # Pack by weight
             partials = sorted(partials, key=weighter.partialweight, reverse=True)
             partials = [p for p in partials if weighter.partialweight(p) > 0]
             tracks = [Track(mingap=minmargin) for _ in range(numtracks)]
@@ -411,19 +400,17 @@ def _pack(spectrum:sndtrck.Spectrum,
         tracks.extend(ch.tracks)
         rejected0.extend(ch.rejected)
     for ch in channels:
-        packed_partials = sum(len(track) for track in ch.tracks)
-        logger.debug(f"    Channel: {ch.freq0:.0f}-{ch.freq1:.0f}Hz  num. tracks: {len(ch.tracks)}, num. partials: {len(ch.partials)}, packed: {packed_partials}")
+        packedPartials = sum(len(track) for track in ch.tracks)
+        logger.debug(f"    Channel: {ch.freq0:.0f}-{ch.freq1:.0f}Hz  # tracks: {len(ch.tracks)}, # partials: {len(ch.partials)}, packed: {packedPartials}")
 
     # Try to fit rejected partials
     # rejected0.sort(key=lambda par:weighter.partialweight(par), reverse=True)
     # rejected = []  # type: List[sndtrck.Partial]
     rejected = rejected0
-    #logger.debug(f"/////////////////// minmargin: {minmargin}")
     rejected1 = []
     for partial in rejected:
         track = get_best_track(tracks, partial, maxrange=maxrange*0.7, minmargin=minmargin)
         if track is not None:
-            # logger.debug(f"Adding previously rejected partial: {partial.meanfreq:.0f}Hz, {partial.t0:.3f}-{partial.t1:.3f}")
             track.add_partial(partial)
         else:
             rejected1.append(partial)
