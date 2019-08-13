@@ -42,6 +42,8 @@ That should install all the python dependencies needed
 
 ![](examples/colours-slower-mono.png)
 
+[Open PDF](examples/colours-slower-mono-transcr.pdf)
+
 #### Partial Tracking
 
 ![](examples/colours-slower-mono-transcr.jpg)
@@ -50,4 +52,4 @@ That should install all the python dependencies needed
 
 ![](examples/colours-slower-mono-transcr.pdf.png)
 
-Sound of transcription: [transcription](examples/colours-slower-mono-transcr.mp3)
+Sound of transcription: [transcription](examples/colours-slower-mono-transcr.mp3?raw=true)
