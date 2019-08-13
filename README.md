@@ -38,9 +38,9 @@ That should install all the python dependencies needed
 
 #### Original Soundfile
 
-[colours](examples/colours-slower-mono.mp3)
+[colours](examples/colours-slower-mono.mp3?raw=true)
 
-![](examples/colors-slower-mono.png)
+![](examples/colours-slower-mono.png)
 
 #### Partial Tracking
 
