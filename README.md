@@ -42,7 +42,7 @@ That should install all the python dependencies needed
 
 ![](examples/colours-slower-mono.png)
 
-[Open PDF](examples/colours-slower-mono-transcr.pdf)
+[Open PDF](examples/colours-slower-mono-transcr.pdf?raw=true)
 
 #### Partial Tracking
 
