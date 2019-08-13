@@ -6,10 +6,11 @@
 
 
 A spectrum is the result of partial tracking analysis, done via
-[sndtrck]
+[sndtrck](https://github.com/gesellkammer/sndtrck)
+
 This is done in a series of steps:
 
-* spectral analysis, using [sndtrck]
+* spectral analysis, using `sndtrck`
 * translation of partial tracking information to musicxml, with the
   possibility of using microtones and dynamics
 * generate lilypond and pdf files
@@ -20,7 +21,7 @@ This is done in a series of steps:
 # Dependencies
 
 * csound >= 6.13 (for playback)
-
+* csound-plugins: https://github.com/csound-plugins/csound-plugins
 
 # installation
 
@@ -33,6 +34,20 @@ That should install all the python dependencies needed
 
 **NB**: only python >= 3.7 supported
   
+## Example
 
-[sndtrck]: https://github.com/gesellkammer/sndtrck
-[csound-plugins]: https://github.com/csound-plugins/csound-plugins
+#### Original Soundfile
+
+[colours](examples/colours-slower-mono.mp3)
+
+![](examples/colors-slower-mono.png)
+
+#### Partial Tracking
+
+![](examples/colours-slower-mono-transcr.jpg)
+
+#### Transcription
+
+![](examples/colours-slower-mono-transcr.pdf.png)
+
+Sound of transcription: [transcription](examples/colours-slower-mono-transcr.mp3)
