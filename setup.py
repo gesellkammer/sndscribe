@@ -16,7 +16,7 @@ if sys.argv[-1] == 'publish':
     os.system('python setup.py sdist upload')
     sys.exit()
 
-readme = open('README.rst').read()
+readme = open('README.md').read()
 
 
 APPNAME = "sndscribe"
@@ -105,11 +105,12 @@ clean_previous_install()
 setup(
     name='sndscribe',
     python_requires=">=3.6",
-    version='0.2.2',
+    version='0.3.0',
     packages=[
         'sndscribe',
     ],
-    package_data={'sndscribe':['xml2ly/*.py_', 'data/*']},
+    # package_data={'sndscribe':['xml2ly/*.py_', 'data/*']},
+    package_data={'sndscribe':['data/*']},
     setup_requires=[
         'appdirs'
     ],
@@ -122,6 +123,9 @@ setup(
         "appdirs",
         "ruamel.yaml"
     ],
+    long_description=readme,
+    long_description_content_type='text/markdown'
+
     license="GPL",
     zip_safe=False,
     classifiers=[
@@ -131,6 +135,5 @@ setup(
     author='Eduardo Moguillansky',
     author_email='eduardo.moguillansky@gmail.com',
     description='Translate the spectrum of an audio file into musical notation',
-    long_description=readme,
                 
 )

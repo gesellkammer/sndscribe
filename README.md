@@ -2,6 +2,9 @@
 
 **sndscribe** translates a spectrum of a soundfile into musical notation.
 
+![](pics/count3.png)
+
+
 A spectrum is the result of partial tracking analysis, done via
 [sndtrck]
 This is done in a series of steps:
