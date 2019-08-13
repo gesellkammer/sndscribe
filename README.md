@@ -12,19 +12,24 @@ This is done in a series of steps:
 * spectral analysis, using [sndtrck]
 * translation of partial tracking information to musicxml, with the
   possibility of using microtones and dynamics
-* automatic conversion of the generated musicxml to pdf via lilypond
-  
+* generate lilypond and pdf files
+* pitch resolution up to 1/8 tones
+* transient and formant analysis can be used to further annotate the transcription
+* listen to the transcription
+
 # Dependencies
 
-* csound >= 6.12 (for playback)
+* csound >= 6.13 (for playback)
 
 
 # installation
 
-`pip install sndscribes`
+1) Install csound and lilypond
+2) Install sndscribe
+
+`pip install sndscribe`
 
 That should install all the python dependencies needed
-
 
 **NB**: only python >= 3.7 supported
   
