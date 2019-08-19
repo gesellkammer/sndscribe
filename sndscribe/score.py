@@ -100,8 +100,7 @@ class Score(object):
             transient_mask = self.transient_mask
             for staff in self.staffs:
                 for note in staff.unrendered_notes():
-                    t = note.start
-                    note.transient = transient_mask(t)
+                    note.transient = transient_mask(note.start)
 
         for i, staff in enumerate(self.staffs):
             logger.debug("Rendering staff %d/%d" % (i+1, len(self.staffs)))
@@ -184,7 +183,7 @@ class Score(object):
         outfile = lib.normalize_path(outfile)
         ext = os.path.splitext(outfile)[1].lower()
         if ext == ".xml":
-            self.toxml(outfile)
+            self._writexml(outfile)
         elif ext == ".pdf":
             return self.writepdf(outfile=outfile, method='lilypond')
         elif ext == ".ly":
@@ -223,7 +222,10 @@ class Score(object):
         if openpdf:
              lib.open_with_standard_app(outfile)
 
-    def toxml(self, outfile: str) -> None:
+    def show(self):
+        self.writepdf(tempfile.mktemp(suffix=".pdf"), openpdf=True, method='lilypond')
+
+    def _writexml(self, outfile: str) -> None:
         """
         Writes the already rendered score to a musicXML file.
 
@@ -305,10 +307,6 @@ class Score(object):
         totalweight = 0
         for note in self.iternotes():
             if not note.isrest():
-                # totalweight += note.amp * note.dur
-                # totalweight += calculate_weight_note(note)
-                # totalweight += noteweight(note.pitch, amp2db(note.amp), note.dur)
-                # totalweight += self.weighter.noteweight(note.pitch, amp2db(note.amp), note.dur)
                 totalweight += self.weighter.weight(m2f(note.pitch), amp2db(note.amp), note.dur)
         return totalweight/self.end
 

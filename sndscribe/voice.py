@@ -1,4 +1,4 @@
-from __future__ import absolute_import
+from __future__ import annotations
 import numpy as np
 from emlib.pitchtools import f2m
 import sndtrck
@@ -19,11 +19,11 @@ class Voice:
         * No rests should be added, they are generated during rendering.
         * A voice generates a list of measures, each measure generates a list of pulses
         """
-        self._notes = []          # type: List[Note]
-        self._meanpitch = -1      # type: float
-        self.measures = []        # type: List[Measure]
-        self.divided_notes = []   # type: List[Note]
-        self.added_partials = 0
+        self._notes: List[Note] = []
+        self._meanpitch = -1.0
+        self.measures: List[Measure] = [] 
+        self.divided_notes: List[Note] = []    
+        self.added_partials: int = 0
         assert lastnote_duration is not None
         self.lastnote_duration = asR(lastnote_duration)
         if notes:
@@ -34,6 +34,9 @@ class Voice:
             return "Voice()"
         else:
             return "Voice(%.3f:%.3f)" % (self.start.__float__(), self.end.__float__())
+
+    def __iter__(self) -> Iter[Measure]:
+        return iter(self.measures)
 
     def isrendered(self) -> bool:
         return len(self.measures) > 0
@@ -195,7 +198,7 @@ class Voice:
         # The 1st and last bp can have amp=0, used to avoid clicks. Should we include them?
         if len(partialdata) > 2 and partialdata[0, 2] == 0 and partialdata[0, 1] == partialdata[1, 1]:
             partialdata = partialdata[1:]
-        notes = [] # type: List[Note]
+        notes: List[Note] = []
         for i in range(len(partialdata)-1):
             t0, freq0, amp0, phase0, bw0 = partialdata[i, 0:5]
             t1, freq1, amp1 = partialdata[i+1, 0:3]

@@ -5,19 +5,20 @@ from .scorefuncs import *
 from .quantization import find_best_division
 from .config import RenderConfig
 
+
 class Pulse(object):
     def __init__(self,
                  notes:  List[Event],
                  offset: Fraction,
                  renderconfig: RenderConfig,
                  pulsedur: Fraction=R(1)
-        ):
+                 ):
         assert isinstance(notes, list)
         assert len(notes) > 0
         assert all(isinstance(note, Event) for note in notes)
         assert isinstance(offset, Fraction) and offset >= 0
         assert isinstance(pulsedur, Fraction) and pulsedur > 0
-        pitch_resolution = renderconfig['pitch_resolution'] # type: float
+        pitch_resolution: float = renderconfig['pitch_resolution']
         dyncurve = renderconfig.dyncurve
         self.original_notes = notes
         self.notes = [snapnote(note, pitch_resolution, dyncurve=dyncurve)
@@ -43,6 +44,9 @@ class Pulse(object):
 
     def __iter__(self):
         return iter(self.notes)
+
+    def __len__(self):
+        return len(self.notes)
 
     def quantize(self):
         """
@@ -70,9 +74,7 @@ class Pulse(object):
             div, assigned_notes, info = find_best_division(
                 self.notes, possible_divs, pulsestart=self.offset,
                 pulsedur=pulse_dur, dyncurve=self.renderconfig.dyncurve,
-                config=self.renderconfig
-                )
-            # assert not(len(self.notes) > 1 and div == 1), (self.notes)
+                config=self.renderconfig)
             assert div in possible_divs
             possible_durs = [R(i, div) for i in range(1, div + 1)]
             assert all(event.dur in possible_durs for event in assigned_notes)
@@ -82,8 +84,6 @@ class Pulse(object):
         self.notes = break_irregular_tuples(self.notes, self.subdivision, pulse_dur)
         self.notes.sort(key=lambda n: n.start)
         self._division_info = info
-        # for note in self.notes:
-        #     note.freeze()
         assert len(self.notes) >= 1
         assert self.subdivision >= 1
         t0, t1 = self.offset, self.offset+self.pulse_dur

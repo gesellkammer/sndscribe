@@ -73,7 +73,6 @@ class Staff(object):
     
     def dump(self):
         lines = []
-        dyncurve = self.renderconfig.dyncurve
         for i, voice in enumerate(self.voices):
             lines.append("Voice %d    ---------------------------" % i)
             for m, measure in enumerate(voice.measures):
@@ -105,7 +104,8 @@ class Staff(object):
         _, T, T1 = parser, parser.tag, parser.tag1
 
         for voice in self.voices:
-            for measure in voice:
+            assert voice.isrendered()
+            for measure in voice.measures:
                 for pulse in measure:
                     pulse.join_tied_notes()
             voice.check_ties()

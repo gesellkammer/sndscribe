@@ -6,6 +6,7 @@ from .typehints import *
 from .fraction import Fraction
 from .config import RenderConfig
 
+
 class Measure:
     """
     Measures are created by each voice when they are rendered.
@@ -27,7 +28,6 @@ class Measure:
         return iter(self.pulses)
 
     def create_pulses(self) -> None:
-        self.pulses = []
         timesig = self.renderconfig.timesig
         tempo = self.renderconfig.tempo
         pulsedur = timesig2pulsedur(timesig, tempo)
@@ -51,10 +51,6 @@ class Measure:
                     dyn = dyncurve.amp2dyn(note.amp) if not note.isrest() else "-"
                     logger.debug(f"note: {note}   dyn: {dyn}")
                 logger.error("too many notes")
-            #logger.debug(f"create_pulse: Pulse #{pulsenum} with {len(notes_in_pulse)} notes / {t0}s - {t1}s")
-            #for i, n in enumerate(notes_in_pulse):
-            #    logger.debug(f"    note #{i}: {n}")
             pulse = Pulse(notes_in_pulse, t0, self.renderconfig)
-            pulses.append(notes_in_pulse)
-            self.pulses.append(pulse)
-        assert sum(len(pulse) for pulse in pulses) == len(self.notes)
+            pulses.append(pulse)
+        self.pulses = pulses
