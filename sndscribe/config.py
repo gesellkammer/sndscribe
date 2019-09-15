@@ -14,30 +14,18 @@ from emlib import conftools
 from . import dynamics
 from . import envir
 from .error import ImmutableError
-from .definitions import ALLOWED_DIVISIONS, POSSIBLE_DYNAMICS
+from . import definitions
 from .tools import parse_timesig, as_timesig_tuple
 
 
-logger = logging.getLogger("sndscribe")
+NAME = "sndscribe"
 
 
-_appconfig_default = {
-    'app.yaml': ''
-}
-
-globalsettings: Dict[str, Any] = {
-    'debug': False
-}
+logger = logging.getLogger(NAME)
 
 
-appconfig = conftools.ConfigDict('sndscore', _appconfig_default)
-
-DEBUG_BEST_DIVISION = False
-
-
-# See defaultconfig.yaml for documentation on each key
-
-_isbool = lambda opt: isinstance(opt, bool)
+def _isbool(opt):
+    return isinstance(opt, bool)
 
 
 def _islistof(T):
@@ -48,14 +36,37 @@ def _oneof(*opts):
     return lambda x: x in opts
 
 
+def _fileexists(path):
+    return os.path.exists(os.path.abspath(os.path.expanduser(path)))
 
 
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+# App Config
+
+_appconfig_default = {
+    'debug': False,
+    'app.yaml': '',
+    'lilypond.path': ''
+}
+
+_appconfig_validator = {
+    'lilypond.path': _fileexists,
+}
+
+appconfig = conftools.ConfigDict(NAME, _appconfig_default, validator=_appconfig_validator)
+
+
+
+# ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~+
+# Transcription config
+#
+# See defaultconfig.yaml for documentation on each key
 
 _validator = {
     'pitch_resolution':lambda r:r in {0.25, 0.5, 1},
-    'divisions':lambda divs:all(div in ALLOWED_DIVISIONS for div in divs),
+    'divisions':lambda divs:all(div in definitions.ALLOWED_DIVISIONS for div in divs),
     'downsample_spectrum': _isbool,
-    'dynamics': lambda dynamics: all(dyn in POSSIBLE_DYNAMICS for dyn in dynamics),
+    'dynamics': lambda dynamics: all(dyn in definitions.POSSIBLE_DYNAMICS for dyn in dynamics),
     'dyncurve_mindb': lambda mindb: -120 <= mindb <= 0,
     'dyncurve_maxdb': lambda maxdb: -120 <= maxdb <= 0,
     'dyncurve_shape': lambda shape: shape == 'linear' or shape.startswith('expon'),
@@ -202,7 +213,6 @@ class ConfigDict(dict):
         """
         self.name: str = name
         self._yamldict = d
-        # self._fallback: dict = fallback if fallback is not None else _defaultconfig
         self._fallback: dict = fallback
         self._validator = _validator
         self._immutable = False

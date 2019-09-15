@@ -251,11 +251,6 @@ MUSICXML_NOTEHEADS = [
 bw_to_noteheadindex = bpf.linear(0, 0, 1, len(MUSICXML_NOTEHEADS)-1)
 
 
-LILYPATH = {
-    'Darwin':'/Applications/LilyPond.app/Contents/Resources/bin/lilypond',
-    'Linux':'/usr/bin/lilypond'
-}[platform_name]
-
 # exactitud de la grid en la traduccion a musicxml
 # lcm(3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 20, 32)
 # No puede representar exactamente tuples de 11, 13, 17
@@ -315,6 +310,8 @@ class Region(NamedTuple):
     t1: float
 
 
+ARTICULATIONS = {
+    "accent",
+    "marcato"
+}
 
-
-# Region = namedtuple("Region", "t0 t1")

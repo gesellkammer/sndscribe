@@ -7,9 +7,9 @@ from emlib.pitchtools import amp2db
 from emlib.iterlib import pairwise
 from .envir import logger
 from . import typehints as t
+from enum import Enum
 
-
-class NonMutableError(Exception): 
+class NonMutableError(Exception):
     pass
 
 
@@ -147,7 +147,7 @@ class Note(Event):
         return out
 
     def add_articulation(self, articulation:str) -> None:
-        assert isinstance(articulation, str)
+        assert isinstance(articulation, str) and articulation in _ARTICULATIONS
         if self.articulations is not None:
             self.articulations.append(articulation)
         else:

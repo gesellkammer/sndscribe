@@ -149,6 +149,7 @@ def get_datafile(filename):
         return None
     return target
 
+
 def xml2ly_init():
     global _scripts_initialized
     if _scripts_initialized:
